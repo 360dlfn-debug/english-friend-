@@ -372,7 +372,7 @@ Spoken line: "Awesome! 10 times completed. Now back to our chat: [Ask next follo
       contents: geminiContents,
       generationConfig: {
         temperature: 0.7,
-        maxOutputTokens: 180
+        maxOutputTokens: 800
       }
     };
 
