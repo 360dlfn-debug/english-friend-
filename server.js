@@ -11,9 +11,17 @@ let API_KEY = process.env.GEMINI_API_KEY || '';
 let CURRENT_MODEL = process.env.DEFAULT_MODEL || 'gemini-3.8-flash';
 let CURRENT_VOICE = 'Puck'; // Puck (Male), Aoede (Female)
 
-const STUDY_LOGS_DIR = path.join(__dirname, 'study_logs');
-if (!fs.existsSync(STUDY_LOGS_DIR)) {
-  fs.mkdirSync(STUDY_LOGS_DIR, { recursive: true });
+// Support Vercel serverless /tmp writable directory
+const STUDY_LOGS_DIR = process.env.VERCEL 
+  ? path.join('/tmp', 'study_logs') 
+  : path.join(__dirname, 'study_logs');
+
+try {
+  if (!fs.existsSync(STUDY_LOGS_DIR)) {
+    fs.mkdirSync(STUDY_LOGS_DIR, { recursive: true });
+  }
+} catch (e) {
+  console.warn('mkdir warning:', e.message);
 }
 
 // Master Cumulative Expression Storage
@@ -32,32 +40,40 @@ function loadMasterNotes() {
 }
 
 function saveMasterNotes(notes) {
-  fs.writeFileSync(MASTER_JSON_PATH, JSON.stringify(notes, null, 2), 'utf-8');
+  try {
+    fs.writeFileSync(MASTER_JSON_PATH, JSON.stringify(notes, null, 2), 'utf-8');
 
-  // Also maintain human-readable Markdown format
-  let md = `# 📚 누적 복습 마스터 표현 노트\n\n`;
-  md += `> 이 파일은 지난 모든 대화에서 틀려서 교정한 표현과 배운 단어들이 누적 저장되는 단 하나의 마스터 파일입니다.\n`;
-  md += `> AI 친구는 다음 대화 때 여기에 있는 표현을 자연스럽게 내 입에서 나오도록 집요하게 스텔스 유도합니다.\n\n`;
-  md += `| 등록일 | 원래 한 말 (오류) | 원어민 추천 표현 (목표) | 뉘앙스 / 설명 | 마스터 상태 |\n`;
-  md += `| :--- | :--- | :--- | :--- | :--- |\n`;
+    let md = `# 📚 누적 복습 마스터 표현 노트\n\n`;
+    md += `> 이 파일은 지난 모든 대화에서 틀려서 교정한 표현과 배운 단어들이 누적 저장되는 단 하나의 마스터 파일입니다.\n`;
+    md += `> AI 친구는 다음 대화 때 여기에 있는 표현을 자연스럽게 내 입에서 나오도록 집요하게 스텔스 유도합니다.\n\n`;
+    md += `| 등록일 | 원래 한 말 (오류) | 원어민 추천 표현 (목표) | 뉘앙스 / 설명 | 마스터 상태 |\n`;
+    md += `| :--- | :--- | :--- | :--- | :--- |\n`;
 
-  notes.forEach(item => {
-    const statusIcon = item.status === 'mastered' ? '✅ 마스터 완료' : '🎯 훈련 중 (스텔스 유도 대상)';
-    md += `| ${item.dateAdded || '-'} | ${item.original || '-'} | **${item.corrected}** | ${item.explanation || '-'} | ${statusIcon} |\n`;
-  });
+    notes.forEach(item => {
+      const statusIcon = item.status === 'mastered' ? '✅ 마스터 완료' : '🎯 훈련 중 (스텔스 유도 대상)';
+      md += `| ${item.dateAdded || '-'} | ${item.original || '-'} | **${item.corrected}** | ${item.explanation || '-'} | ${statusIcon} |\n`;
+    });
 
-  fs.writeFileSync(MASTER_MD_PATH, md, 'utf-8');
+    fs.writeFileSync(MASTER_MD_PATH, md, 'utf-8');
+  } catch (e) {
+    console.warn('saveMasterNotes warning:', e.message);
+  }
 }
 
 // Helper to get recent topics to prevent repetition
 function getRecentTopics() {
-  const files = fs.readdirSync(STUDY_LOGS_DIR).filter(f => f.endsWith('.md') && f.includes('['));
-  const recentTopics = [];
-  files.forEach(f => {
-    const match = f.match(/\[(.*?)\]/);
-    if (match) recentTopics.push(match[1]);
-  });
-  return recentTopics.slice(-5); // Last 5 topics
+  try {
+    if (!fs.existsSync(STUDY_LOGS_DIR)) return [];
+    const files = fs.readdirSync(STUDY_LOGS_DIR).filter(f => f.endsWith('.md') && f.includes('['));
+    const recentTopics = [];
+    files.forEach(f => {
+      const match = f.match(/\[(.*?)\]/);
+      if (match) recentTopics.push(match[1]);
+    });
+    return recentTopics.slice(-5);
+  } catch (e) {
+    return [];
+  }
 }
 
 // Read raw SKILL.md
@@ -101,7 +117,8 @@ function pcmToWav(pcmBuffer, sampleRate = 24000, numChannels = 1, bitsPerSample 
 // Generate Real Gemini Live Native Audio (24kHz Human Voice)
 async function generateLiveAudio(text, voiceName = 'Puck') {
   try {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${API_KEY}`;
+    const key = API_KEY || process.env.GEMINI_API_KEY;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${key}`;
     const payload = {
       contents: [{ parts: [{ text }] }],
       generationConfig: {
@@ -142,23 +159,28 @@ async function generateLiveAudio(text, voiceName = 'Puck') {
 
 // Network helper for IP
 function getLocalIpAddresses() {
-  const interfaces = os.networkInterfaces();
-  const addresses = [];
-  for (const k in interfaces) {
-    for (const k2 in interfaces[k]) {
-      const address = interfaces[k][k2];
-      if (address.family === 'IPv4' && !address.internal) {
-        addresses.push(address.address);
+  try {
+    const interfaces = os.networkInterfaces();
+    const addresses = [];
+    for (const k in interfaces) {
+      for (const k2 in interfaces[k]) {
+        const address = interfaces[k][k2];
+        if (address.family === 'IPv4' && !address.internal) {
+          addresses.push(address.address);
+        }
       }
     }
+    return addresses;
+  } catch (e) {
+    return [];
   }
-  return addresses;
 }
 
 // Config Endpoint
 app.get('/api/config', (req, res) => {
+  const currentKey = API_KEY || process.env.GEMINI_API_KEY;
   res.json({
-    hasKey: !!API_KEY,
+    hasKey: !!currentKey,
     currentModel: CURRENT_MODEL,
     currentVoice: CURRENT_VOICE,
     availableModels: ['gemini-3.8-flash', 'gemini-3.1-pro-preview'],
@@ -188,7 +210,7 @@ app.get('/api/session-init', (req, res) => {
 
     res.json({
       recentTopics,
-      pendingTargets: pendingTargets.slice(0, 5) // Up to 5 target expressions to stealth elicit
+      pendingTargets: pendingTargets.slice(0, 5)
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -199,11 +221,13 @@ app.get('/api/session-init', (req, res) => {
 app.get('/api/logs', (req, res) => {
   try {
     const masterNotes = loadMasterNotes();
-    const sessionFiles = fs.readdirSync(STUDY_LOGS_DIR)
-      .filter(f => f.endsWith('.md') && f.includes('['))
-      .sort()
-      .reverse();
-
+    let sessionFiles = [];
+    if (fs.existsSync(STUDY_LOGS_DIR)) {
+      sessionFiles = fs.readdirSync(STUDY_LOGS_DIR)
+        .filter(f => f.endsWith('.md') && f.includes('['))
+        .sort()
+        .reverse();
+    }
     res.json({ masterNotes, sessionFiles });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -217,7 +241,6 @@ app.post('/api/save-log', (req, res) => {
     const today = new Date().toISOString().split('T')[0];
     const safeTopic = (topic || 'Daily Conversation').replace(/[\\/:*?"<>|]/g, '_');
 
-    // 1. Save Full Transcript to Date-titled Session File
     const sessionFilename = `${today} [${safeTopic}] English Study.md`;
     const sessionFilePath = path.join(STUDY_LOGS_DIR, sessionFilename);
 
@@ -242,12 +265,14 @@ ${corrections && corrections.length > 0 ? corrections.map((c, i) => `
 ${fullTranscript || '(No transcript recorded)'}
 \`\`\`
 `;
-    fs.writeFileSync(sessionFilePath, logContent, 'utf-8');
+    try {
+      fs.writeFileSync(sessionFilePath, logContent, 'utf-8');
+    } catch (e) {
+      console.warn('session file write warning:', e.message);
+    }
 
-    // 2. 🌟 Accumulate into Single Master Cumulative Expression File!
     const masterNotes = loadMasterNotes();
 
-    // Mark mastered targets
     if (masteredTargets && Array.isArray(masteredTargets)) {
       masteredTargets.forEach(target => {
         const found = masterNotes.find(m => m.corrected.toLowerCase() === target.toLowerCase());
@@ -255,7 +280,6 @@ ${fullTranscript || '(No transcript recorded)'}
       });
     }
 
-    // Append new corrections into the master list
     if (corrections && Array.isArray(corrections)) {
       corrections.forEach(c => {
         const exists = masterNotes.some(m => m.corrected.toLowerCase() === c.corrected.toLowerCase());
@@ -265,7 +289,7 @@ ${fullTranscript || '(No transcript recorded)'}
             original: c.original,
             corrected: c.corrected,
             explanation: c.explanation,
-            status: 'pending' // Pending stealth elicitation for future sessions
+            status: 'pending'
           });
         }
       });
@@ -284,10 +308,11 @@ ${fullTranscript || '(No transcript recorded)'}
   }
 });
 
-// Core Chat Endpoint with SKILL.md Stealth Elicitation Protocol
+// Core Chat Endpoint
 app.post('/api/chat', async (req, res) => {
   try {
-    if (!API_KEY) {
+    const key = API_KEY || process.env.GEMINI_API_KEY;
+    if (!key) {
       return res.status(400).json({ error: 'API Key is missing.' });
     }
 
@@ -295,7 +320,6 @@ app.post('/api/chat', async (req, res) => {
     const modelToUse = req.body.model || CURRENT_MODEL;
     const voiceToUse = req.body.voice || CURRENT_VOICE;
 
-    // Build Stealth Review Context
     let stealthContext = '';
     if (stealthTargets && stealthTargets.length > 0) {
       stealthContext = `
@@ -341,7 +365,7 @@ Spoken line: "Awesome! 10 times completed. Now back to our chat: [Ask next follo
       parts: [{ text: m.text }]
     }));
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelToUse}:generateContent?key=${API_KEY}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelToUse}:generateContent?key=${key}`;
     
     const payload = {
       systemInstruction: { parts: [{ text: systemPrompt }] },
@@ -413,14 +437,24 @@ Spoken line: "Awesome! 10 times completed. Now back to our chat: [Ask next follo
   }
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-  const localIps = getLocalIpAddresses();
-  console.log(`\n======================================================`);
-  console.log(`🚀 English Friend Full Stealth Review & Master Storage Engine`);
-  console.log(`📱 Local PC:    http://localhost:${PORT}`);
-  localIps.forEach(ip => {
-    console.log(`📱 Mobile (WiFi): http://${ip}:${PORT}`);
-  });
-  console.log(`🎙️  Voice: ${CURRENT_VOICE}`);
-  console.log(`======================================================\n`);
+// Fallback route for SPA index.html
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
+
+// Local dev listening
+if (!process.env.VERCEL) {
+  app.listen(PORT, '0.0.0.0', () => {
+    const localIps = getLocalIpAddresses();
+    console.log(`\n======================================================`);
+    console.log(`🚀 English Friend Pure SKILL.md Engine running!`);
+    console.log(`📱 Local PC:    http://localhost:${PORT}`);
+    localIps.forEach(ip => {
+      console.log(`📱 Mobile (WiFi): http://${ip}:${PORT}`);
+    });
+    console.log(`🎙️  Voice: ${CURRENT_VOICE}`);
+    console.log(`======================================================\n`);
+  });
+}
+
+module.exports = app;
