@@ -311,7 +311,7 @@ ${fullTranscript || '(No transcript recorded)'}
 // Core Chat Endpoint
 app.post('/api/chat', async (req, res) => {
   try {
-    const key = API_KEY || process.env.GEMINI_API_KEY;
+    const key = req.body.apiKey || API_KEY || process.env.GEMINI_API_KEY;
     if (!key) {
       return res.status(400).json({ error: 'API Key is missing.' });
     }

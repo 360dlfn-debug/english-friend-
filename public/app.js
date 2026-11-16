@@ -11,7 +11,8 @@ const state = {
   isListening: false,
   isSpeaking: false,
   currentModel: 'gemini-3.8-flash',
-  currentVoice: 'Puck'
+  currentVoice: 'Puck',
+  apiKey: localStorage.getItem('gemini_api_key') || ''
 };
 
 // 20-Topic Rotation Pool from SKILL.md
@@ -72,6 +73,7 @@ const closeSettingsBtn = document.getElementById('closeSettingsBtn');
 const saveSettingsBtn = document.getElementById('saveSettingsBtn');
 const modelSelect = document.getElementById('modelSelect');
 const voiceSelect = document.getElementById('voiceSelect');
+const apiKeyInput = document.getElementById('apiKeyInput');
 const mobileUrls = document.getElementById('mobileUrls');
 const saveLogBtn = document.getElementById('saveLogBtn');
 
@@ -286,6 +288,7 @@ async function handleUserInput(text) {
         messages: state.messages,
         model: state.currentModel,
         voice: state.currentVoice,
+        apiKey: state.apiKey,
         stealthTargets: state.stealthTargets,
         currentTopic: state.currentTopic
       })
@@ -415,6 +418,7 @@ INSTRUCTIONS:
         messages: state.messages,
         model: state.currentModel,
         voice: state.currentVoice,
+        apiKey: state.apiKey,
         stealthTargets: state.stealthTargets,
         currentTopic: state.currentTopic
       })
@@ -534,6 +538,7 @@ saveLogBtn.addEventListener('click', saveSessionLog);
 // Settings
 settingsBtn.addEventListener('click', () => {
   loadConfig();
+  if (apiKeyInput) apiKeyInput.value = state.apiKey;
   settingsModal.classList.remove('hidden');
 });
 
@@ -544,11 +549,17 @@ closeSettingsBtn.addEventListener('click', () => {
 saveSettingsBtn.addEventListener('click', async () => {
   const selectedModel = modelSelect.value;
   const selectedVoice = voiceSelect.value;
+  const enteredKey = apiKeyInput ? apiKeyInput.value.trim() : '';
+
+  if (enteredKey) {
+    state.apiKey = enteredKey;
+    localStorage.setItem('gemini_api_key', enteredKey);
+  }
 
   await fetch('/api/config', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: selectedModel, voice: selectedVoice })
+    body: JSON.stringify({ model: selectedModel, voice: selectedVoice, apiKey: state.apiKey })
   });
 
   state.currentModel = selectedModel;
@@ -556,6 +567,7 @@ saveSettingsBtn.addEventListener('click', async () => {
   voiceBadge.innerText = `Gemini Live • ${selectedVoice}`;
   aiRoleLabel.innerText = `Gemini Live (${selectedVoice})`;
   settingsModal.classList.add('hidden');
+  alert('설정이 저장되었습니다!');
 });
 
 // Bootstrap
