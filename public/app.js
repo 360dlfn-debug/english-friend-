@@ -3,11 +3,10 @@ const state = {
   messages: [],
   corrections: [],
   currentTopic: '',
-  stealthTargets: [], // Expressions to elicit secretly from the master notebook
+  stealthTargets: [],
   drillActive: false,
   drillCount: 0,
   drillTarget: '',
-  handsFree: true,
   isListening: false,
   isSpeaking: false,
   currentModel: 'gemini-3.8-flash',
@@ -100,11 +99,12 @@ if (installAppBtn) {
   });
 }
 
-// Speech Recognition & Gemini Live Audio
+// Speech Recognition & Audio Objects
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 let recognition = null;
 let currentAudio = null;
 let silenceTimer = null;
+let lastRecognizedText = '';
 let isAudioUnlocked = false;
 
 function unlockAudio() {
@@ -113,80 +113,99 @@ function unlockAudio() {
   silent.play().then(() => { isAudioUnlocked = true; }).catch(() => {});
 }
 
+// Rock-Solid Speech Recognition Setup
 function initSpeech() {
-  if (SpeechRecognition) {
-    recognition = new SpeechRecognition();
-    recognition.lang = 'en-US';
-    recognition.interimResults = true;
-    recognition.continuous = false;
+  if (!SpeechRecognition) {
+    alert('이 브라우저는 음성 인식을 지원하지 않습니다. Chrome 또는 Safari를 사용해 주세요.');
+    return;
+  }
 
-    recognition.onstart = () => {
-      stopAudioPlayback();
-      state.isListening = true;
-      updateVisuals();
-      userSpeechBlock.classList.remove('hidden');
-      userSpeechText.innerText = 'Listening to you...';
-      statusMsg.innerText = '듣고 있습니다...';
-    };
+  recognition = new SpeechRecognition();
+  recognition.lang = 'en-US';
+  recognition.interimResults = true;
+  recognition.continuous = true; // Stay alive continuously!
 
-    recognition.onspeechstart = () => {
-      stopAudioPlayback();
-    };
+  recognition.onstart = () => {
+    stopAudioPlayback();
+    state.isListening = true;
+    lastRecognizedText = '';
+    updateVisuals();
+    userSpeechBlock.classList.remove('hidden');
+    userSpeechText.innerText = '말씀해 보세요... (듣는 중)';
+    statusMsg.innerText = '🔴 듣고 있습니다 • 다 말씀하시면 마이크를 다시 누르세요';
+  };
 
-    recognition.onresult = (event) => {
-      stopAudioPlayback();
+  recognition.onresult = (event) => {
+    stopAudioPlayback();
 
-      let interim = '';
-      let final = '';
+    let interim = '';
+    let final = '';
 
-      for (let i = event.resultIndex; i < event.results.length; ++i) {
-        if (event.results[i].isFinal) {
-          final += event.results[i][0].transcript;
-        } else {
-          interim += event.results[i][0].transcript;
-        }
+    for (let i = event.resultIndex; i < event.results.length; ++i) {
+      if (event.results[i].isFinal) {
+        final += event.results[i][0].transcript;
+      } else {
+        interim += event.results[i][0].transcript;
       }
+    }
 
-      const display = final || interim;
-      if (display) {
-        userSpeechText.innerText = display;
+    const currentText = (final || interim).trim();
+    if (currentText) {
+      lastRecognizedText = currentText;
+      userSpeechText.innerText = currentText;
+    }
+
+    // Auto-submit after 1.8s silence
+    clearTimeout(silenceTimer);
+    silenceTimer = setTimeout(() => {
+      if (state.isListening && lastRecognizedText.trim()) {
+        submitUserSpeech();
       }
+    }, 1800);
+  };
 
-      clearTimeout(silenceTimer);
-      if (interim.trim() && !final.trim()) {
-        silenceTimer = setTimeout(() => {
-          if (recognition && state.isListening) {
-            try { recognition.stop(); } catch(e){}
-            handleUserInput(interim.trim());
-          }
-        }, 1100);
-      }
+  recognition.onerror = (event) => {
+    console.warn('Speech error:', event.error);
+    if (event.error === 'not-allowed') {
+      alert('마이크 사용 권한이 차단되어 있습니다. 브라우저 설정에서 마이크를 허용해 주세요!');
+    }
+    stopListening();
+  };
 
-      if (final.trim()) {
-        clearTimeout(silenceTimer);
-        handleUserInput(final.trim());
-      }
-    };
-
-    recognition.onerror = (event) => {
-      console.warn('Speech error:', event.error);
+  recognition.onend = () => {
+    // If user was actively speaking and text was captured, submit it!
+    if (state.isListening && lastRecognizedText.trim()) {
+      submitUserSpeech();
+    } else {
       stopListening();
-    };
+    }
+  };
+}
 
-    recognition.onend = () => {
-      stopListening();
-    };
+function submitUserSpeech() {
+  const textToSend = lastRecognizedText.trim();
+  stopListening();
+  if (textToSend) {
+    handleUserInput(textToSend);
   }
 }
 
 function startListening() {
   unlockAudio();
   stopAudioPlayback();
-  if (recognition && !state.isListening) {
+  lastRecognizedText = '';
+
+  if (recognition) {
+    try {
+      recognition.abort(); // Clean reset
+    } catch(e){}
     try {
       recognition.start();
     } catch(e) {
-      console.warn('Recognition start error:', e);
+      console.warn('Recognition start retry:', e);
+      setTimeout(() => {
+        try { recognition.start(); } catch(e2){}
+      }, 150);
     }
   }
 }
@@ -194,8 +213,11 @@ function startListening() {
 function stopListening() {
   state.isListening = false;
   clearTimeout(silenceTimer);
+  if (recognition) {
+    try { recognition.stop(); } catch(e){}
+  }
   updateVisuals();
-  statusMsg.innerText = state.isSpeaking ? '원어민 친구 말하는 중...' : '대기 중 • 마이크 탭';
+  statusMsg.innerText = state.isSpeaking ? 'AI 친구 말하는 중...' : '마이크를 탭하여 말씀하세요';
 }
 
 function stopAudioPlayback() {
@@ -226,7 +248,7 @@ function updateVisuals() {
   }
 }
 
-// Play Pure Gemini Live Native Voice
+// Play Gemini Live Native Audio
 function playGeminiLiveAudio(audioDataUrl, onComplete) {
   stopAudioPlayback();
 
@@ -241,12 +263,9 @@ function playGeminiLiveAudio(audioDataUrl, onComplete) {
       state.isSpeaking = false;
       currentAudio = null;
       updateVisuals();
-      statusMsg.innerText = '준비 완료 • 편하게 말씀하세요';
+      // Prompt user clearly for mobile friendly flow
+      statusMsg.innerText = '👉 아래 마이크를 누르고 말씀하세요!';
       if (onComplete) onComplete();
-
-      if (state.handsFree) {
-        setTimeout(startListening, 300);
-      }
     };
 
     currentAudio.onerror = (e) => {
@@ -261,9 +280,7 @@ function playGeminiLiveAudio(audioDataUrl, onComplete) {
       updateVisuals();
     });
   } else {
-    if (state.handsFree) {
-      setTimeout(startListening, 1000);
-    }
+    statusMsg.innerText = '👉 아래 마이크를 누르고 말씀하세요!';
   }
 }
 
@@ -278,7 +295,7 @@ async function handleUserInput(text) {
   userSpeechBlock.classList.remove('hidden');
   state.messages.push({ role: 'user', text });
 
-  statusMsg.innerText = '답변 생성 중...';
+  statusMsg.innerText = '답변 생성 중... (잠시만 기다려주세요)';
 
   try {
     const res = await fetch('/api/chat', {
@@ -294,14 +311,13 @@ async function handleUserInput(text) {
       })
     });
 
-    if (!res.ok) throw new Error('API Error');
-
     const data = await res.json();
     if (!res.ok) {
       const errMsg = (data && data.error) ? data.error : 'API Error';
       throw new Error(errMsg);
     }
-    const spokenText = data.cleanSpokenText || data.rawText || "Hey! How can I help you today?";
+
+    const spokenText = data.cleanSpokenText || data.rawText || "I see. Let's keep talking!";
 
     aiSpeechText.innerText = spokenText;
     state.messages.push({ role: 'model', text: spokenText });
@@ -323,11 +339,11 @@ async function handleUserInput(text) {
   } catch (err) {
     console.error(err);
     if (err.message && err.message.includes('API key')) {
-      aiSpeechText.innerText = "설정(⚙️)에서 올바른 Google AI Studio API 키(AIzaSy...)를 입력해 주세요.";
+      aiSpeechText.innerText = "설정(⚙️)에서 올바른 Google AI Studio API 키를 입력해 주세요.";
     } else {
-      aiSpeechText.innerText = "죄송해요, 일시적인 연결 오류입니다. 다시 시도해 주세요.";
+      aiSpeechText.innerText = "죄송해요, 잠시 연결이 원활하지 않았어요. 다시 한번 말씀해 주시겠어요?";
     }
-    statusMsg.innerText = '오류 발생';
+    statusMsg.innerText = '오류 발생 • 다시 시도해 주세요';
   }
 }
 
@@ -364,7 +380,7 @@ function finishDrill() {
   }, 2000);
 }
 
-// 🌟 Start Session with Non-Repeating Topics & Cumulative Stealth Review!
+// Start Session
 async function startSession() {
   unlockAudio();
   welcomeTrigger.classList.add('hidden');
@@ -374,7 +390,6 @@ async function startSession() {
   aiSpeechText.innerText = '원어민 친구가 이전 노트를 복습하며 새 주제를 고르는 중...';
   statusMsg.innerText = '세션 준비 중...';
 
-  // 1. Fetch recent topics & master cumulative review expressions
   let chosenTopic = TOPICS[0];
   try {
     const initRes = await fetch('/api/session-init');
@@ -382,14 +397,10 @@ async function startSession() {
     const recentTopics = initData.recentTopics || [];
     state.stealthTargets = initData.pendingTargets || [];
 
-    // Filter out recently used topics to avoid repetition!
     const availableTopics = TOPICS.filter(t => !recentTopics.some(rt => t.includes(rt) || rt.includes(t)));
     chosenTopic = availableTopics.length > 0 
       ? availableTopics[Math.floor(Math.random() * availableTopics.length)]
       : TOPICS[Math.floor(Math.random() * TOPICS.length)];
-
-    console.log(`[Topic Chosen]: ${chosenTopic} (Excluded recent: ${recentTopics.length})`);
-    console.log(`[Stealth Review Targets]: ${state.stealthTargets.length} expressions loaded from master notebook`);
   } catch (e) {
     console.warn('Session init failed:', e);
   }
@@ -397,7 +408,6 @@ async function startSession() {
   state.currentTopic = chosenTopic;
   topicText.innerText = chosenTopic;
 
-  // 2. Strict SKILL.md rule: Proactive 'Did you hear / Guess what I did' Opener + Stealth Elicitation
   const starterPrompt = `[CRITICAL SESSION START]
 Topic: "${chosenTopic}"
 Stealth Review Targets from Master Notebook: ${state.stealthTargets.map(t => `"${t.corrected}"`).join(', ') || 'None yet'}
@@ -426,22 +436,23 @@ INSTRUCTIONS:
 
     const data = await res.json();
     if (!res.ok) {
-      const errMsg = (data && data.error) ? data.error : 'API Error';
-      throw new Error(errMsg);
+      throw new Error(data.error || 'Failed to start');
     }
-    const spokenText = data.cleanSpokenText || data.rawText || "Hey! How can I help you today?";
 
+    const spokenText = data.cleanSpokenText || data.rawText || "Hey! Great to talk to you!";
     state.messages = [{ role: 'model', text: spokenText }];
     aiSpeechText.innerText = spokenText;
 
     playGeminiLiveAudio(data.audioDataUrl);
 
   } catch (e) {
+    console.error(e);
     aiSpeechText.innerText = "Hey! Did you hear about that crazy AI tool everyone has been testing lately?";
+    statusMsg.innerText = '👉 아래 마이크를 누르고 대답해 보세요!';
   }
 }
 
-// Save Full Session Log & Update Master Notebook
+// Save Full Session Log
 async function saveSessionLog() {
   if (state.messages.length === 0) {
     alert('아직 나눈 대화가 없습니다.');
@@ -502,12 +513,15 @@ directStartBtn.addEventListener('click', (e) => {
   startSession();
 });
 
+// Tap to Talk / Tap to Stop & Send
 micBtn.addEventListener('click', () => {
   if (state.isSpeaking) {
+    // User interrupted AI: Stop speaking & immediately listen
     stopAudioPlayback();
     startListening();
   } else if (state.isListening) {
-    if (recognition) recognition.stop();
+    // User finished talking: Stop & submit immediately!
+    submitUserSpeech();
   } else if (state.messages.length === 0) {
     startSession();
   } else {
