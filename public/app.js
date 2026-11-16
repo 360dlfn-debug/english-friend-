@@ -294,7 +294,11 @@ async function handleUserInput(text) {
     if (!res.ok) throw new Error('API Error');
 
     const data = await res.json();
-    const spokenText = data.cleanSpokenText || data.rawText;
+    if (!res.ok) {
+      const errMsg = (data && data.error) ? data.error : 'API Error';
+      throw new Error(errMsg);
+    }
+    const spokenText = data.cleanSpokenText || data.rawText || "Hey! How can I help you today?";
 
     aiSpeechText.innerText = spokenText;
     state.messages.push({ role: 'model', text: spokenText });
@@ -315,7 +319,11 @@ async function handleUserInput(text) {
 
   } catch (err) {
     console.error(err);
-    aiSpeechText.innerText = "Sorry, could you say that again?";
+    if (err.message && err.message.includes('API key')) {
+      aiSpeechText.innerText = "설정(⚙️)에서 올바른 Google AI Studio API 키(AIzaSy...)를 입력해 주세요.";
+    } else {
+      aiSpeechText.innerText = "죄송해요, 일시적인 연결 오류입니다. 다시 시도해 주세요.";
+    }
     statusMsg.innerText = '오류 발생';
   }
 }
@@ -413,7 +421,11 @@ INSTRUCTIONS:
     });
 
     const data = await res.json();
-    const spokenText = data.cleanSpokenText || data.rawText;
+    if (!res.ok) {
+      const errMsg = (data && data.error) ? data.error : 'API Error';
+      throw new Error(errMsg);
+    }
+    const spokenText = data.cleanSpokenText || data.rawText || "Hey! How can I help you today?";
 
     state.messages = [{ role: 'model', text: spokenText }];
     aiSpeechText.innerText = spokenText;
