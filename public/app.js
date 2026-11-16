@@ -7,6 +7,7 @@ const state = {
   drillActive: false,
   drillCount: 0,
   drillTarget: '',
+  sessionActive: false, // Session stays alive continuously like a real phone call!
   isListening: false,
   isSpeaking: false,
   currentModel: 'gemini-3.8-flash',
@@ -99,13 +100,13 @@ if (installAppBtn) {
   });
 }
 
-// Speech Recognition & Audio Objects
+// Continuous Hands-Free Speech Recognition & Audio
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 let recognition = null;
 let currentAudio = null;
 let silenceTimer = null;
-let lastRecognizedText = '';
 let isAudioUnlocked = false;
+let currentTranscript = '';
 
 function unlockAudio() {
   if (isAudioUnlocked) return;
@@ -113,7 +114,7 @@ function unlockAudio() {
   silent.play().then(() => { isAudioUnlocked = true; }).catch(() => {});
 }
 
-// Rock-Solid Speech Recognition Setup
+// 🌟 Full Continuous Live Loop (Never stops listening!)
 function initSpeech() {
   if (!SpeechRecognition) {
     alert('이 브라우저는 음성 인식을 지원하지 않습니다. Chrome 또는 Safari를 사용해 주세요.');
@@ -123,20 +124,28 @@ function initSpeech() {
   recognition = new SpeechRecognition();
   recognition.lang = 'en-US';
   recognition.interimResults = true;
-  recognition.continuous = true; // Stay alive continuously!
+  recognition.continuous = true;
 
   recognition.onstart = () => {
-    stopAudioPlayback();
     state.isListening = true;
-    lastRecognizedText = '';
     updateVisuals();
-    userSpeechBlock.classList.remove('hidden');
-    userSpeechText.innerText = '말씀해 보세요... (듣는 중)';
-    statusMsg.innerText = '🔴 듣고 있습니다 • 다 말씀하시면 마이크를 다시 누르세요';
+    if (!state.isSpeaking) {
+      statusMsg.innerText = '🔴 실시간 경청 중 • 그냥 편하게 말씀하세요';
+    }
+  };
+
+  recognition.onspeechstart = () => {
+    // If AI is speaking and user starts talking -> Barge-in immediately!
+    if (state.isSpeaking) {
+      stopAudioPlayback();
+    }
   };
 
   recognition.onresult = (event) => {
-    stopAudioPlayback();
+    // If AI is speaking, user's voice cuts it off
+    if (state.isSpeaking) {
+      stopAudioPlayback();
+    }
 
     let interim = '';
     let final = '';
@@ -149,75 +158,63 @@ function initSpeech() {
       }
     }
 
-    const currentText = (final || interim).trim();
-    if (currentText) {
-      lastRecognizedText = currentText;
-      userSpeechText.innerText = currentText;
+    const textNow = (final || interim).trim();
+    if (textNow) {
+      currentTranscript = textNow;
+      userSpeechBlock.classList.remove('hidden');
+      userSpeechText.innerText = textNow;
     }
 
-    // Auto-submit after 1.8s silence
+    // Hands-Free Auto Submit: 1.4 seconds of silence after speaking
     clearTimeout(silenceTimer);
     silenceTimer = setTimeout(() => {
-      if (state.isListening && lastRecognizedText.trim()) {
-        submitUserSpeech();
+      if (currentTranscript.trim() && !state.isSpeaking && state.sessionActive) {
+        const toSend = currentTranscript.trim();
+        currentTranscript = '';
+        handleUserInput(toSend);
       }
-    }, 1800);
+    }, 1400);
   };
 
   recognition.onerror = (event) => {
-    console.warn('Speech error:', event.error);
-    if (event.error === 'not-allowed') {
-      alert('마이크 사용 권한이 차단되어 있습니다. 브라우저 설정에서 마이크를 허용해 주세요!');
+    // Ignore harmless timeouts, keep loop alive
+    if (event.error !== 'no-speech') {
+      console.warn('Speech error:', event.error);
     }
-    stopListening();
   };
 
+  // 🌟 Permanent Auto-Revive: If browser closes mic, revive it in 150ms!
   recognition.onend = () => {
-    // If user was actively speaking and text was captured, submit it!
-    if (state.isListening && lastRecognizedText.trim()) {
-      submitUserSpeech();
-    } else {
-      stopListening();
+    state.isListening = false;
+    updateVisuals();
+
+    if (state.sessionActive) {
+      setTimeout(() => {
+        try {
+          recognition.start();
+        } catch(e) {
+          // Retry
+          setTimeout(() => {
+            try { recognition.start(); } catch(e2){}
+          }, 300);
+        }
+      }, 150);
     }
   };
 }
 
-function submitUserSpeech() {
-  const textToSend = lastRecognizedText.trim();
-  stopListening();
-  if (textToSend) {
-    handleUserInput(textToSend);
-  }
-}
-
-function startListening() {
+function startListeningLoop() {
   unlockAudio();
-  stopAudioPlayback();
-  lastRecognizedText = '';
+  state.sessionActive = true;
+  currentTranscript = '';
 
   if (recognition) {
-    try {
-      recognition.abort(); // Clean reset
-    } catch(e){}
     try {
       recognition.start();
     } catch(e) {
-      console.warn('Recognition start retry:', e);
-      setTimeout(() => {
-        try { recognition.start(); } catch(e2){}
-      }, 150);
+      // Already running
     }
   }
-}
-
-function stopListening() {
-  state.isListening = false;
-  clearTimeout(silenceTimer);
-  if (recognition) {
-    try { recognition.stop(); } catch(e){}
-  }
-  updateVisuals();
-  statusMsg.innerText = state.isSpeaking ? 'AI 친구 말하는 중...' : '마이크를 탭하여 말씀하세요';
 }
 
 function stopAudioPlayback() {
@@ -237,25 +234,25 @@ function updateVisuals() {
   soundWave.classList.remove('active');
   micBtn.classList.remove('listening', 'speaking');
 
-  if (state.isListening) {
-    statusDot.classList.add('listening');
-    micBtn.classList.add('listening');
-    soundWave.classList.add('active');
-  } else if (state.isSpeaking) {
+  if (state.isSpeaking) {
     statusDot.classList.add('speaking');
     micBtn.classList.add('speaking');
+    soundWave.classList.add('active');
+  } else if (state.isListening) {
+    statusDot.classList.add('listening');
+    micBtn.classList.add('listening');
     soundWave.classList.add('active');
   }
 }
 
-// Play Gemini Live Native Audio
+// 🌟 Play Gemini Live Audio & Seamlessly Hand Over to Mic
 function playGeminiLiveAudio(audioDataUrl, onComplete) {
   stopAudioPlayback();
 
   if (audioDataUrl) {
     state.isSpeaking = true;
     updateVisuals();
-    statusMsg.innerText = `Gemini Live (${state.currentVoice}) 말하는 중...`;
+    statusMsg.innerText = `Gemini Live (${state.currentVoice}) 말하는 중... (말씀하시면 끊어요)`;
 
     currentAudio = new Audio(audioDataUrl);
 
@@ -263,8 +260,8 @@ function playGeminiLiveAudio(audioDataUrl, onComplete) {
       state.isSpeaking = false;
       currentAudio = null;
       updateVisuals();
-      // Prompt user clearly for mobile friendly flow
-      statusMsg.innerText = '👉 아래 마이크를 누르고 말씀하세요!';
+      // Mic is already alive and listening! User doesn't need to touch anything!
+      statusMsg.innerText = '🔴 제미나이가 듣고 있습니다 • 편하게 말씀하세요!';
       if (onComplete) onComplete();
     };
 
@@ -272,19 +269,21 @@ function playGeminiLiveAudio(audioDataUrl, onComplete) {
       console.warn('Audio playback error:', e);
       state.isSpeaking = false;
       updateVisuals();
+      statusMsg.innerText = '🔴 듣고 있습니다 • 말씀하세요!';
     };
 
     currentAudio.play().catch(e => {
       console.warn('Audio play blocked:', e);
       state.isSpeaking = false;
       updateVisuals();
+      statusMsg.innerText = '🔴 듣고 있습니다 • 말씀하세요!';
     });
   } else {
-    statusMsg.innerText = '👉 아래 마이크를 누르고 말씀하세요!';
+    statusMsg.innerText = '🔴 듣고 있습니다 • 말씀하세요!';
   }
 }
 
-// Handle User Input
+// Handle User Input (100% Hands-Free Autonomous Cycle)
 async function handleUserInput(text) {
   if (!text.trim()) return;
 
@@ -295,7 +294,7 @@ async function handleUserInput(text) {
   userSpeechBlock.classList.remove('hidden');
   state.messages.push({ role: 'user', text });
 
-  statusMsg.innerText = '답변 생성 중... (잠시만 기다려주세요)';
+  statusMsg.innerText = '⚡ 생각하는 중...';
 
   try {
     const res = await fetch('/api/chat', {
@@ -334,6 +333,7 @@ async function handleUserInput(text) {
       finishDrill();
     }
 
+    // Play Gemini Live Voice - when done, loop naturally continues!
     playGeminiLiveAudio(data.audioDataUrl);
 
   } catch (err) {
@@ -341,9 +341,9 @@ async function handleUserInput(text) {
     if (err.message && err.message.includes('API key')) {
       aiSpeechText.innerText = "설정(⚙️)에서 올바른 Google AI Studio API 키를 입력해 주세요.";
     } else {
-      aiSpeechText.innerText = "죄송해요, 잠시 연결이 원활하지 않았어요. 다시 한번 말씀해 주시겠어요?";
+      aiSpeechText.innerText = "Sorry, I missed that. Could you say that again?";
     }
-    statusMsg.innerText = '오류 발생 • 다시 시도해 주세요';
+    statusMsg.innerText = '🔴 다시 말씀해 주시면 바로 들어요!';
   }
 }
 
@@ -380,15 +380,18 @@ function finishDrill() {
   }, 2000);
 }
 
-// Start Session
+// 🌟 Start Session: One Tap to Launch Infinite Natural Phone Call!
 async function startSession() {
   unlockAudio();
   welcomeTrigger.classList.add('hidden');
   aiSpeechBlock.classList.remove('hidden');
   liveWaveWrap.classList.remove('hidden');
 
+  // Start the permanent live mic loop!
+  startListeningLoop();
+
   aiSpeechText.innerText = '원어민 친구가 이전 노트를 복습하며 새 주제를 고르는 중...';
-  statusMsg.innerText = '세션 준비 중...';
+  statusMsg.innerText = '대화 시작 중...';
 
   let chosenTopic = TOPICS[0];
   try {
@@ -448,7 +451,7 @@ INSTRUCTIONS:
   } catch (e) {
     console.error(e);
     aiSpeechText.innerText = "Hey! Did you hear about that crazy AI tool everyone has been testing lately?";
-    statusMsg.innerText = '👉 아래 마이크를 누르고 대답해 보세요!';
+    statusMsg.innerText = '🔴 듣고 있습니다 • 그냥 말씀하세요!';
   }
 }
 
@@ -513,19 +516,18 @@ directStartBtn.addEventListener('click', (e) => {
   startSession();
 });
 
-// Tap to Talk / Tap to Stop & Send
+// Center Button: Only needed if user wants to force-interrupt AI or toggle session
 micBtn.addEventListener('click', () => {
-  if (state.isSpeaking) {
-    // User interrupted AI: Stop speaking & immediately listen
-    stopAudioPlayback();
-    startListening();
-  } else if (state.isListening) {
-    // User finished talking: Stop & submit immediately!
-    submitUserSpeech();
-  } else if (state.messages.length === 0) {
+  if (!state.sessionActive) {
     startSession();
-  } else {
-    startListening();
+  } else if (state.isSpeaking) {
+    // Force interrupt AI
+    stopAudioPlayback();
+  } else if (currentTranscript.trim()) {
+    // Force submit right now without waiting 1.4s
+    const toSend = currentTranscript.trim();
+    currentTranscript = '';
+    handleUserInput(toSend);
   }
 });
 
