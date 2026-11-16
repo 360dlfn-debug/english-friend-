@@ -76,11 +76,19 @@ function getRecentTopics() {
   }
 }
 
-// Read raw SKILL.md
-let skillContent = '';
-const skillPath = path.join(__dirname, 'SKILL.md');
-if (fs.existsSync(skillPath)) {
-  skillContent = fs.readFileSync(skillPath, 'utf-8');
+// Read raw SKILL.md with robust built-in fallback
+let skillContent = `You are a real-life native English conversation partner for adults (20s-40s).
+Keep conversations engaging, casual, witty, and pre-intermediate spoken level.
+Lead 10-repetition turn-taking drills whenever correcting awkward phrasing.
+Rotate topics across 20 everyday adult themes and avoid repeating recent topics.`;
+
+try {
+  const skillPath = path.join(__dirname, 'SKILL.md');
+  if (fs.existsSync(skillPath)) {
+    skillContent = fs.readFileSync(skillPath, 'utf-8');
+  }
+} catch (e) {
+  console.warn('SKILL.md read warning:', e.message);
 }
 
 app.use(cors());
@@ -418,6 +426,10 @@ Spoken line: "Awesome! 10 times completed. Now back to our chat: [Ask next follo
       .replace(/<<<CORRECTION[\s\S]*?CORRECTION>>>/g, '')
       .replace(/<<<DRILL_COUNT:[^>]+>>>/g, '')
       .trim();
+
+    if (!cleanSpokenText) {
+      cleanSpokenText = rawText || "Hey! I'm here. Could you say that again?";
+    }
 
     const audioDataUrl = await generateLiveAudio(cleanSpokenText, voiceToUse);
 
