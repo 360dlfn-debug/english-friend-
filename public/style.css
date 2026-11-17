@@ -297,6 +297,29 @@ body {
 
 .user-text {
   color: #93c5fd;
+  min-height: 28px;
+}
+
+.live-interim {
+  color: #60a5fa;
+  font-weight: 600;
+  opacity: 0.95;
+  border-bottom: 2px dashed #3b82f6;
+}
+
+.typing-cursor {
+  display: inline-block;
+  width: 2.5px;
+  height: 1.15em;
+  background-color: #38bdf8;
+  margin-left: 3px;
+  vertical-align: -2px;
+  animation: cursor-blink 0.65s infinite;
+}
+
+@keyframes cursor-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
 }
 
 .ai-text {

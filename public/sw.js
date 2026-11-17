@@ -1,4 +1,4 @@
-const CACHE_NAME = 'english-friend-v4';
+const CACHE_NAME = 'english-friend-v5';
 
 self.addEventListener('install', (e) => {
   self.skipWaiting();

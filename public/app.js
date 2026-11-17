@@ -14,6 +14,16 @@ function getInitialApiKey() {
   }
 }
 
+function escapeHtml(str) {
+  if (!str) return '';
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
 const state = {
   messages: [],
   corrections: [],
@@ -111,7 +121,6 @@ async function requestWakeLock() {
       wakeLock = await navigator.wakeLock.request('screen');
       console.log('[WakeLock] Screen Wake Lock acquired - screen will not turn off');
     } else {
-      // Fallback for iOS < 16.4: Silent looping video element prevents sleep
       fallbackWakeLock();
     }
   } catch (err) {
@@ -126,7 +135,6 @@ function fallbackWakeLock() {
     wakeLockVideo.setAttribute('playsinline', '');
     wakeLockVideo.setAttribute('loop', '');
     wakeLockVideo.muted = true;
-    // 0.1s minimal blank base64 mp4
     wakeLockVideo.src = 'data:video/mp4;base64,AAAAHGZ0eXBpc29tAAAAAGlzb21tcDQxAAAACHZpZGVvAAAA';
     wakeLockVideo.style.position = 'fixed';
     wakeLockVideo.style.opacity = '0.001';
@@ -324,7 +332,7 @@ function speakNativeText(text) {
     };
 
     const wordCount = clean.split(/\s+/).length;
-    const estimatedMs = Math.max(2000, (wordCount / 2.2) * 1000 + 1500);
+    const estimatedMs = Math.max(1800, (wordCount / 2.5) * 1000 + 1000);
     setTimeout(endHandler, estimatedMs);
 
     window.speechSynthesis.speak(utterance);
@@ -361,21 +369,26 @@ async function playAiSpeech(spokenText, audioDataUrl) {
   } finally {
     state.isSpeaking = false;
     updateVisuals();
-    statusMsg.innerText = '🔴 듣고 있습니다 • 영어로 말씀하세요!';
+    if (state.drillActive) {
+      statusMsg.innerText = `🎯 10회 반복 중 (${state.drillCount}/10) • 따라 말씀하세요!`;
+    } else {
+      statusMsg.innerText = '🔴 듣고 있습니다 • 영어로 말씀하세요!';
+    }
     if (state.sessionActive && !state.isProcessing) {
-      setTimeout(startListeningSafe, 350);
+      // 250ms buffer to prevent phone speaker sound feedback
+      setTimeout(startListeningSafe, 250);
     }
   }
 }
 
 // ==============================================================================
-// 🎙️ Cross-Platform Hands-Free Speech Recognition (No Premature Cut-Offs!)
+// 🎙️ Real-time Speech Recognition Engine (Continuous Real-time Streaming)
 // ==============================================================================
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 let recognition = null;
 let silenceTimer = null;
 let currentRecordedText = '';
-let accumulatedTranscript = ''; // Stores speech across mobile onend pauses so nothing gets lost!
+let accumulatedTranscript = '';
 let isRecognitionStarting = false;
 
 function setupSpeechRecognition() {
@@ -387,20 +400,25 @@ function setupSpeechRecognition() {
   recognition = new SpeechRecognition();
   recognition.lang = 'en-US';
   recognition.interimResults = true;
-  recognition.continuous = false; // continuous=false required for robust lifecycle on mobile
+  recognition.continuous = true; // continuous streaming for instant live-typing!
 
   recognition.onstart = () => {
     isRecognitionStarting = false;
     state.isListening = true;
     updateVisuals();
     userSpeechBlock.classList.remove('hidden');
+
     if (!currentRecordedText.trim() && !accumulatedTranscript.trim()) {
-      userSpeechText.innerText = '듣고 있습니다... 편하게 말씀하세요 🎙️';
+      userSpeechText.innerHTML = `<span style="color:#6b7280;">듣고 있습니다... 말씀해 보세요</span> <span class="typing-cursor"></span>`;
     }
-    const waitSeconds = state.silenceThresholdMs > 0 ? (state.silenceThresholdMs / 1000).toFixed(1) : '수동';
-    statusMsg.innerText = state.silenceThresholdMs > 0 
-      ? `🔴 듣고 있습니다 • 말씀 후 ${waitSeconds}초 멈추시면 답변합니다`
-      : `🔴 듣고 있습니다 • 말씀 완료 후 마이크를 터치해 주세요`;
+    if (state.drillActive) {
+      statusMsg.innerText = `🎯 10회 반복 중 (${state.drillCount}/10) • AI 말을 듣고 따라 하세요!`;
+    } else {
+      const waitSeconds = state.silenceThresholdMs > 0 ? (state.silenceThresholdMs / 1000).toFixed(1) : '수동';
+      statusMsg.innerText = state.silenceThresholdMs > 0 
+        ? `🔴 듣고 있습니다 • 말씀 후 ${waitSeconds}초 멈추시면 답변합니다`
+        : `🔴 듣고 있습니다 • 말씀 완료 후 마이크를 터치해 주세요`;
+    }
   };
 
   recognition.onresult = (event) => {
@@ -416,29 +434,43 @@ function setupSpeechRecognition() {
       }
     }
 
-    const currentChunk = (finalTranscript + interimTranscript).trim();
-    if (currentChunk) {
-      // Seamlessly join with previously accumulated words from natural breathing pauses!
-      const fullText = accumulatedTranscript ? `${accumulatedTranscript} ${currentChunk}` : currentChunk;
-      currentRecordedText = fullText;
-      userSpeechText.innerText = fullText; // Immediate live visual feedback!
+    const activeChunk = (finalTranscript + interimTranscript).trim();
+    if (activeChunk) {
+      const fullConfirmed = accumulatedTranscript ? `${accumulatedTranscript} ${finalTranscript}`.trim() : finalTranscript.trim();
+      const fullDisplay = (accumulatedTranscript ? `${accumulatedTranscript} ${activeChunk}` : activeChunk).trim();
+      currentRecordedText = fullDisplay;
+
+      // 🌟 Live Real-time Typing Stream: Confirmed words in clean blue, interim words highlighted with glowing cursor!
+      let displayHtml = '';
+      if (fullConfirmed) {
+        displayHtml += escapeHtml(fullConfirmed) + ' ';
+      }
+      if (interimTranscript.trim()) {
+        displayHtml += `<span class="live-interim">${escapeHtml(interimTranscript.trim())}</span> `;
+      }
+      displayHtml += `<span class="typing-cursor"></span>`;
+      userSpeechText.innerHTML = displayHtml;
+
       micBtn.classList.add('has-speech');
 
-      if (state.silenceThresholdMs > 0) {
+      if (state.drillActive) {
+        statusMsg.innerText = `🎯 10회 반복 중 (${state.drillCount}/10) • 따라하시면 즉시 카운트됩니다!`;
+      } else if (state.silenceThresholdMs > 0) {
         statusMsg.innerText = `🎙️ 듣는 중... (말씀을 멈추시면 ${(state.silenceThresholdMs / 1000).toFixed(1)}초 후 자동 전송)`;
       } else {
         statusMsg.innerText = `🎙️ 듣는 중... (말씀 후 중앙 마이크를 누르시면 전송됩니다)`;
       }
     }
 
-    // Reset silence timer on every spoken word
+    // ⚡ Drill mode uses ultra-responsive 0.65s wait time; Regular mode uses user setting
+    const waitTime = state.drillActive ? 650 : state.silenceThresholdMs;
     clearTimeout(silenceTimer);
-    if (state.silenceThresholdMs > 0) {
+    if (waitTime > 0) {
       silenceTimer = setTimeout(() => {
         if ((currentRecordedText.trim() || accumulatedTranscript.trim()) && !state.isSpeaking && !state.isProcessing && state.sessionActive) {
           submitSpeech();
         }
-      }, state.silenceThresholdMs);
+      }, waitTime);
     }
   };
 
@@ -453,7 +485,7 @@ function setupSpeechRecognition() {
     }
 
     if (state.sessionActive && !state.isSpeaking && !state.isProcessing) {
-      setTimeout(startListeningSafe, 300);
+      setTimeout(startListeningSafe, 250);
     }
   };
 
@@ -462,25 +494,21 @@ function setupSpeechRecognition() {
     state.isListening = false;
     updateVisuals();
 
-    // Critical state check: Never restart listening while server is thinking or speaking!
     if (!state.sessionActive || state.isSpeaking || state.isProcessing) {
       return;
     }
 
-    // 🌟 REVOLUTIONARY FIX FOR CUT-OFFS:
-    // If the mobile browser stopped recognition on a 1-second pause, DO NOT SUBMIT PREMATURELY!
-    // Instead, preserve what was spoken into accumulatedTranscript and seamlessly restart recognition
-    // so the user can continue their sentence without being cut off!
+    // Preserve words and seamlessly keep listening across mobile disconnects
     if (currentRecordedText.trim()) {
       accumulatedTranscript = currentRecordedText.trim();
-      // Seamlessly keep listening so user can formulate next words
-      setTimeout(startListeningSafe, 150);
+      setTimeout(startListeningSafe, 100);
     } else {
-      setTimeout(startListeningSafe, 200);
+      setTimeout(startListeningSafe, 150);
     }
   };
 }
 
+// ⚡ Central Speech Submission
 function submitSpeech() {
   if (state.isProcessing || state.isSpeaking) return;
 
@@ -491,10 +519,76 @@ function submitSpeech() {
   stopListeningSafe();
 
   if (textToSend) {
-    handleUserInput(textToSend);
+    // If in 10-repetition drill, handle locally in 0.1s without 5-second network API delay!
+    if (state.drillActive) {
+      handleDrillRepetition(textToSend);
+    } else {
+      handleUserInput(textToSend);
+    }
   } else if (state.sessionActive && !state.isSpeaking && !state.isProcessing) {
     startListeningSafe();
   }
+}
+
+// ==============================================================================
+// 🎯 10-Repetition Drill Engine (Instant 0.2s Response - No 5s lag!)
+// ==============================================================================
+async function handleDrillRepetition(userText) {
+  state.isProcessing = true;
+  userSpeechText.innerHTML = `${escapeHtml(userText)}`;
+  userSpeechBlock.classList.remove('hidden');
+
+  state.drillCount = (state.drillCount || 1) + 1;
+  updateDrillCardProgress(state.drillCount);
+
+  if (state.drillCount <= 10) {
+    const drillPrompt = `Number ${state.drillCount}: ${state.drillTarget}`;
+    aiSpeechText.innerText = drillPrompt;
+    aiSpeechBlock.classList.remove('hidden');
+
+    // ⚡ Instant 0.1s response!
+    await playAiSpeech(drillPrompt, null);
+  } else {
+    // 10 times fully completed!
+    const finishPrompt = `Awesome! 10 times completed! Great job.`;
+    aiSpeechText.innerText = finishPrompt;
+    aiSpeechBlock.classList.remove('hidden');
+    finishDrill();
+
+    await playAiSpeech(finishPrompt, null);
+
+    // Naturally resume conversation with Gemini
+    setTimeout(() => {
+      handleUserInput(`[I completed the 10-repetition drill for "${state.drillTarget}"]. Let's continue our talk!`);
+    }, 500);
+  }
+}
+
+function showDrillCard(corr) {
+  state.drillActive = true;
+  state.drillCount = 1;
+  state.drillTarget = corr.corrected;
+  drillCard.classList.remove('hidden');
+  drillOriginalText.innerText = corr.original || 'User speech';
+  drillTargetText.innerText = corr.corrected || '';
+  drillNoteText.innerText = corr.explanation ? `💡 ${corr.explanation}` : '';
+  updateDrillCardProgress(1);
+}
+
+function updateDrillCardProgress(count) {
+  state.drillCount = count;
+  drillStepBadge.innerText = `Count ${count} / 10`;
+  const pct = Math.min(100, Math.round((count / 10) * 100));
+  drillProgressFill.style.width = `${pct}%`;
+}
+
+function finishDrill() {
+  state.drillActive = false;
+  drillStepBadge.innerText = '✅ 10회 완료!';
+  drillProgressFill.style.width = '100%';
+  setTimeout(() => {
+    drillCard.classList.add('hidden');
+  }, 2500);
 }
 
 function startListeningSafe() {
@@ -566,7 +660,7 @@ async function handleUserInput(text) {
   stopAudioPlayback();
   stopListeningSafe();
 
-  userSpeechText.innerText = text;
+  userSpeechText.innerHTML = `${escapeHtml(text)}`;
   userSpeechBlock.classList.remove('hidden');
   state.messages.push({ role: 'user', text });
 
@@ -584,7 +678,7 @@ async function handleUserInput(text) {
         apiKey: state.apiKey,
         stealthTargets: state.stealthTargets,
         currentTopic: state.currentTopic,
-        skipAudio: state.voiceMode === 'instant' // Ultra-fast turn: skips server TTS generation!
+        skipAudio: state.voiceMode === 'instant'
       })
     });
 
@@ -608,12 +702,6 @@ async function handleUserInput(text) {
       showDrillCard(data.correction);
     }
 
-    if (data.drill) {
-      updateDrillStatus(data.drill);
-    } else if (state.drillActive && !data.drill) {
-      finishDrill();
-    }
-
     // 🌟 Play Audio with 100% Failover guarantee!
     await playAiSpeech(spokenText, data.audioDataUrl);
 
@@ -632,48 +720,15 @@ async function handleUserInput(text) {
     updateVisuals();
 
     if (state.sessionActive) {
-      setTimeout(startListeningSafe, 500);
+      setTimeout(startListeningSafe, 400);
     }
   }
-}
-
-// Drill Card Helpers
-function showDrillCard(corr) {
-  state.drillActive = true;
-  state.drillTarget = corr.corrected;
-  drillCard.classList.remove('hidden');
-  drillOriginalText.innerText = corr.original || 'User speech';
-  drillTargetText.innerText = corr.corrected || '';
-  drillNoteText.innerText = corr.explanation ? `💡 ${corr.explanation}` : '';
-}
-
-function updateDrillStatus(drill) {
-  state.drillActive = true;
-  state.drillCount = drill.count;
-  drillCard.classList.remove('hidden');
-  drillStepBadge.innerText = `Count ${drill.count} / 10`;
-  const pct = Math.min(100, Math.round((drill.count / 10) * 100));
-  drillProgressFill.style.width = `${pct}%`;
-  drillTargetText.innerText = drill.target || state.drillTarget;
-
-  if (drill.count >= 10) {
-    setTimeout(finishDrill, 3000);
-  }
-}
-
-function finishDrill() {
-  state.drillActive = false;
-  drillStepBadge.innerText = '✅ 10회 완료!';
-  drillProgressFill.style.width = '100%';
-  setTimeout(() => {
-    drillCard.classList.add('hidden');
-  }, 2000);
 }
 
 // 🌟 Start Session: 1-Tap Handshake to Infinite Natural Voice Conversation
 async function startSession() {
   unlockAudio();
-  requestWakeLock(); // Keeps smartphone screen awake!
+  requestWakeLock();
 
   state.sessionActive = true;
   welcomeTrigger.classList.add('hidden');
