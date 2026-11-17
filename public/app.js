@@ -118,10 +118,11 @@ const copyNotesBtn = document.getElementById('copyNotesBtn');
 const notesListContainer = document.getElementById('notesListContainer');
 
 // Google Drive Sync Elements
+const DEFAULT_GDRIVE_WEBHOOK = "https://script.google.com/macros/s/AKfycbw3LEyYSfVxUEMX1_fv9D0Cm77E22XDUdVQPSzmPlqowsTGjpRAD-s53sX6D-hhGuJt/exec";
 const gdriveWebhookInput = document.getElementById('gdriveWebhookInput');
 const testGdriveBtn = document.getElementById('testGdriveBtn');
 const gdriveStatusText = document.getElementById('gdriveStatusText');
-state.gdriveWebhookUrl = localStorage.getItem('gdrive_webhook_url') || '';
+state.gdriveWebhookUrl = localStorage.getItem('gdrive_webhook_url') || DEFAULT_GDRIVE_WEBHOOK;
 
 // ==============================================================================
 // 💡 Screen Wake Lock: Keeps the smartphone screen ON during conversation
