@@ -27,6 +27,7 @@ const state = {
   isSpeaking: false,
   isProcessing: false, // Critical state lock to prevent race conditions during network requests
   voiceMode: localStorage.getItem('english_voice_mode') || 'instant', // 'instant' | 'gemini'
+  silenceThresholdMs: parseInt(localStorage.getItem('silence_wait_ms') || '2800', 10), // default 2.8s
   currentModel: 'gemini-3.8-flash',
   currentVoice: 'Puck',
   apiKey: getInitialApiKey()
@@ -93,9 +94,65 @@ const saveSettingsBtn = document.getElementById('saveSettingsBtn');
 const modelSelect = document.getElementById('modelSelect');
 const voiceSelect = document.getElementById('voiceSelect');
 const voiceModeSelect = document.getElementById('voiceModeSelect');
+const silenceSelect = document.getElementById('silenceSelect');
 const apiKeyInput = document.getElementById('apiKeyInput');
 const mobileUrls = document.getElementById('mobileUrls');
 const saveLogBtn = document.getElementById('saveLogBtn');
+
+// ==============================================================================
+// 💡 Screen Wake Lock: Keeps the smartphone screen ON during conversation
+// ==============================================================================
+let wakeLock = null;
+let wakeLockVideo = null;
+
+async function requestWakeLock() {
+  try {
+    if ('wakeLock' in navigator) {
+      wakeLock = await navigator.wakeLock.request('screen');
+      console.log('[WakeLock] Screen Wake Lock acquired - screen will not turn off');
+    } else {
+      // Fallback for iOS < 16.4: Silent looping video element prevents sleep
+      fallbackWakeLock();
+    }
+  } catch (err) {
+    console.warn('[WakeLock] Native request failed, using video fallback:', err.message);
+    fallbackWakeLock();
+  }
+}
+
+function fallbackWakeLock() {
+  if (!wakeLockVideo) {
+    wakeLockVideo = document.createElement('video');
+    wakeLockVideo.setAttribute('playsinline', '');
+    wakeLockVideo.setAttribute('loop', '');
+    wakeLockVideo.muted = true;
+    // 0.1s minimal blank base64 mp4
+    wakeLockVideo.src = 'data:video/mp4;base64,AAAAHGZ0eXBpc29tAAAAAGlzb21tcDQxAAAACHZpZGVvAAAA';
+    wakeLockVideo.style.position = 'fixed';
+    wakeLockVideo.style.opacity = '0.001';
+    wakeLockVideo.style.pointerEvents = 'none';
+    wakeLockVideo.style.zIndex = '-1';
+    document.body.appendChild(wakeLockVideo);
+  }
+  wakeLockVideo.play().catch(() => {});
+}
+
+function releaseWakeLock() {
+  if (wakeLock) {
+    try { wakeLock.release(); } catch (e) {}
+    wakeLock = null;
+  }
+  if (wakeLockVideo) {
+    try { wakeLockVideo.pause(); } catch (e) {}
+  }
+}
+
+// Re-acquire wake lock if user switches away and returns to app
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && state.sessionActive) {
+    requestWakeLock();
+  }
+});
 
 // PWA Install Prompt
 let deferredInstallPrompt = null;
@@ -142,11 +199,12 @@ function getAudioContext() {
 
 // Unlock both Web Audio API & Native TTS synchronously on first touch
 function unlockAudio() {
+  requestWakeLock();
+
   if (isAudioUnlocked) return;
   try {
     const ctx = getAudioContext();
     if (ctx) {
-      // Play brief silent buffer
       const buffer = ctx.createBuffer(1, 1, 22050);
       const source = ctx.createBufferSource();
       source.buffer = buffer;
@@ -226,7 +284,6 @@ function speakNativeText(text) {
 
     window.speechSynthesis.cancel();
 
-    // Clean any residual formatting brackets
     const clean = text
       .replace(/<<<[^>]*>>>/g, '')
       .replace(/\[[^\]]*\]/g, '')
@@ -240,7 +297,6 @@ function speakNativeText(text) {
     utterance.rate = 1.0;
     utterance.pitch = 1.0;
 
-    // Select the best natural sounding US English voice available on this device
     const voices = window.speechSynthesis.getVoices();
     const naturalVoice = voices.find(v => v.lang.startsWith('en') && (
       v.name.includes('Samantha') || 
@@ -267,14 +323,12 @@ function speakNativeText(text) {
       endHandler();
     };
 
-    // Safety timeout: In case browser drops onend event
     const wordCount = clean.split(/\s+/).length;
     const estimatedMs = Math.max(2000, (wordCount / 2.2) * 1000 + 1500);
     setTimeout(endHandler, estimatedMs);
 
     window.speechSynthesis.speak(utterance);
 
-    // Safari quirk: if paused, force resume
     if (window.speechSynthesis.paused) {
       window.speechSynthesis.resume();
     }
@@ -309,19 +363,19 @@ async function playAiSpeech(spokenText, audioDataUrl) {
     updateVisuals();
     statusMsg.innerText = '🔴 듣고 있습니다 • 영어로 말씀하세요!';
     if (state.sessionActive && !state.isProcessing) {
-      // 350ms buffer so phone speaker sound doesn't trigger microphone
       setTimeout(startListeningSafe, 350);
     }
   }
 }
 
 // ==============================================================================
-// 🎙️ Cross-Platform Hands-Free Speech Recognition (iOS Safari & Android Chrome)
+// 🎙️ Cross-Platform Hands-Free Speech Recognition (No Premature Cut-Offs!)
 // ==============================================================================
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 let recognition = null;
 let silenceTimer = null;
 let currentRecordedText = '';
+let accumulatedTranscript = ''; // Stores speech across mobile onend pauses so nothing gets lost!
 let isRecognitionStarting = false;
 
 function setupSpeechRecognition() {
@@ -340,17 +394,19 @@ function setupSpeechRecognition() {
     state.isListening = true;
     updateVisuals();
     userSpeechBlock.classList.remove('hidden');
-    if (!currentRecordedText.trim()) {
-      userSpeechText.innerText = '말씀하세요... (듣는 중 🎙️)';
+    if (!currentRecordedText.trim() && !accumulatedTranscript.trim()) {
+      userSpeechText.innerText = '듣고 있습니다... 편하게 말씀하세요 🎙️';
     }
-    statusMsg.innerText = '🔴 듣고 있습니다 • 영어로 말씀하세요!';
+    const waitSeconds = state.silenceThresholdMs > 0 ? (state.silenceThresholdMs / 1000).toFixed(1) : '수동';
+    statusMsg.innerText = state.silenceThresholdMs > 0 
+      ? `🔴 듣고 있습니다 • 말씀 후 ${waitSeconds}초 멈추시면 답변합니다`
+      : `🔴 듣고 있습니다 • 말씀 완료 후 마이크를 터치해 주세요`;
   };
 
   recognition.onresult = (event) => {
     let finalTranscript = '';
     let interimTranscript = '';
 
-    // BUG FIX: Iterate 0 to event.results.length to preserve all completed words!
     for (let i = 0; i < event.results.length; ++i) {
       const res = event.results[i];
       if (res.isFinal) {
@@ -360,21 +416,30 @@ function setupSpeechRecognition() {
       }
     }
 
-    const fullTranscript = (finalTranscript + interimTranscript).trim();
-    if (fullTranscript) {
-      currentRecordedText = fullTranscript;
-      userSpeechText.innerText = fullTranscript; // Immediate live visual feedback!
+    const currentChunk = (finalTranscript + interimTranscript).trim();
+    if (currentChunk) {
+      // Seamlessly join with previously accumulated words from natural breathing pauses!
+      const fullText = accumulatedTranscript ? `${accumulatedTranscript} ${currentChunk}` : currentChunk;
+      currentRecordedText = fullText;
+      userSpeechText.innerText = fullText; // Immediate live visual feedback!
       micBtn.classList.add('has-speech');
-      statusMsg.innerText = '🎙️ 음성 인식 중... (말씀이 끝나면 자동 전송)';
+
+      if (state.silenceThresholdMs > 0) {
+        statusMsg.innerText = `🎙️ 듣는 중... (말씀을 멈추시면 ${(state.silenceThresholdMs / 1000).toFixed(1)}초 후 자동 전송)`;
+      } else {
+        statusMsg.innerText = `🎙️ 듣는 중... (말씀 후 중앙 마이크를 누르시면 전송됩니다)`;
+      }
     }
 
-    // Smart silence detector: 1.8s of quiet auto-submits speech
+    // Reset silence timer on every spoken word
     clearTimeout(silenceTimer);
-    silenceTimer = setTimeout(() => {
-      if (currentRecordedText.trim() && !state.isSpeaking && !state.isProcessing && state.sessionActive) {
-        submitSpeech();
-      }
-    }, 1800);
+    if (state.silenceThresholdMs > 0) {
+      silenceTimer = setTimeout(() => {
+        if ((currentRecordedText.trim() || accumulatedTranscript.trim()) && !state.isSpeaking && !state.isProcessing && state.sessionActive) {
+          submitSpeech();
+        }
+      }, state.silenceThresholdMs);
+    }
   };
 
   recognition.onerror = (event) => {
@@ -387,9 +452,8 @@ function setupSpeechRecognition() {
       return;
     }
 
-    // Auto-recover if active and not processing
     if (state.sessionActive && !state.isSpeaking && !state.isProcessing) {
-      setTimeout(startListeningSafe, 400);
+      setTimeout(startListeningSafe, 300);
     }
   };
 
@@ -403,12 +467,16 @@ function setupSpeechRecognition() {
       return;
     }
 
-    // If user was speaking and pause triggered onend, submit
+    // 🌟 REVOLUTIONARY FIX FOR CUT-OFFS:
+    // If the mobile browser stopped recognition on a 1-second pause, DO NOT SUBMIT PREMATURELY!
+    // Instead, preserve what was spoken into accumulatedTranscript and seamlessly restart recognition
+    // so the user can continue their sentence without being cut off!
     if (currentRecordedText.trim()) {
-      submitSpeech();
+      accumulatedTranscript = currentRecordedText.trim();
+      // Seamlessly keep listening so user can formulate next words
+      setTimeout(startListeningSafe, 150);
     } else {
-      // Re-arm cleanly
-      setTimeout(startListeningSafe, 250);
+      setTimeout(startListeningSafe, 200);
     }
   };
 }
@@ -416,8 +484,9 @@ function setupSpeechRecognition() {
 function submitSpeech() {
   if (state.isProcessing || state.isSpeaking) return;
 
-  const textToSend = currentRecordedText.trim();
+  const textToSend = (currentRecordedText || accumulatedTranscript).trim();
   currentRecordedText = '';
+  accumulatedTranscript = '';
   clearTimeout(silenceTimer);
   stopListeningSafe();
 
@@ -469,7 +538,7 @@ function updateVisuals() {
   } else if (state.isListening) {
     statusDot.classList.add('listening');
     micBtn.classList.add('listening');
-    if (currentRecordedText.trim()) {
+    if (currentRecordedText.trim() || accumulatedTranscript.trim()) {
       micBtn.classList.add('has-speech');
     }
     soundWave.classList.add('active');
@@ -493,7 +562,6 @@ function updateVisuals() {
 async function handleUserInput(text) {
   if (!text || !text.trim() || state.isProcessing) return;
 
-  // Lock state: We are now processing
   state.isProcessing = true;
   stopAudioPlayback();
   stopListeningSafe();
@@ -605,6 +673,7 @@ function finishDrill() {
 // 🌟 Start Session: 1-Tap Handshake to Infinite Natural Voice Conversation
 async function startSession() {
   unlockAudio();
+  requestWakeLock(); // Keeps smartphone screen awake!
 
   state.sessionActive = true;
   welcomeTrigger.classList.add('hidden');
@@ -728,6 +797,7 @@ async function loadConfig() {
     modelSelect.value = data.currentModel;
     if (voiceSelect) voiceSelect.value = state.currentVoice;
     if (voiceModeSelect) voiceModeSelect.value = state.voiceMode;
+    if (silenceSelect) silenceSelect.value = state.silenceThresholdMs.toString();
 
     if (data.localIps && data.localIps.length > 0) {
       mobileUrls.innerHTML = data.localIps.map(ip => `
@@ -767,6 +837,7 @@ if (voiceModeToggle) {
 // Center Mic Button: Smart Action
 micBtn.addEventListener('click', () => {
   unlockAudio();
+  requestWakeLock();
 
   if (!state.sessionActive) {
     startSession();
@@ -774,7 +845,7 @@ micBtn.addEventListener('click', () => {
     // Barge-in: Interrupt AI immediately!
     stopAudioPlayback();
     startListeningSafe();
-  } else if (state.isListening && currentRecordedText.trim()) {
+  } else if (state.isListening && (currentRecordedText.trim() || accumulatedTranscript.trim())) {
     // User finished talking: Instant submit right now!
     submitSpeech();
   } else if (!state.isListening && !state.isProcessing) {
@@ -807,6 +878,7 @@ settingsBtn.addEventListener('click', () => {
   loadConfig();
   if (apiKeyInput) apiKeyInput.value = state.apiKey;
   if (voiceModeSelect) voiceModeSelect.value = state.voiceMode;
+  if (silenceSelect) silenceSelect.value = state.silenceThresholdMs.toString();
   settingsModal.classList.remove('hidden');
 });
 
@@ -818,6 +890,7 @@ saveSettingsBtn.addEventListener('click', async () => {
   const selectedModel = modelSelect.value;
   const selectedVoice = voiceSelect.value;
   const selectedVoiceMode = voiceModeSelect ? voiceModeSelect.value : state.voiceMode;
+  const selectedSilence = silenceSelect ? parseInt(silenceSelect.value, 10) : state.silenceThresholdMs;
   const enteredKey = apiKeyInput ? apiKeyInput.value.trim() : '';
 
   if (enteredKey) {
@@ -827,6 +900,9 @@ saveSettingsBtn.addEventListener('click', async () => {
 
   state.voiceMode = selectedVoiceMode;
   localStorage.setItem('english_voice_mode', selectedVoiceMode);
+
+  state.silenceThresholdMs = selectedSilence;
+  localStorage.setItem('silence_wait_ms', selectedSilence.toString());
 
   await fetch('/api/config', {
     method: 'POST',
@@ -862,7 +938,7 @@ window.addEventListener('DOMContentLoaded', () => {
     navigator.serviceWorker.register('/sw.js').catch(err => console.warn('SW register fail:', err));
   }
 
-  // Pre-unlock audio on any touch gesture
+  // Pre-unlock audio & request wake lock on any touch gesture
   document.body.addEventListener('touchstart', unlockAudio, { once: true });
   document.body.addEventListener('click', unlockAudio, { once: true });
 });

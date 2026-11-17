@@ -15,7 +15,7 @@
   <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
   
-  <link rel="stylesheet" href="/style.css?v=20261117_v3">
+  <link rel="stylesheet" href="/style.css?v=20261117_v4">
 </head>
 <body>
   <div class="app-layout">
@@ -151,6 +151,16 @@
           <small style="color: #9ca3af; font-size: 11px; margin-top: 4px; display: block;">초고속 모드는 스마트폰 내장 고음질 TTS로 즉각 대화합니다. AI 음성 선택 시에도 재생 실패 시 자동으로 초고속 음성으로 전환됩니다.</small>
         </div>
         <div class="form-row">
+          <label>⏱️ 말하기 여유 시간 (중간 생각 시간)</label>
+          <select id="silenceSelect">
+            <option value="2800">2.8초 (권장 - 생각하며 말하기 편한 시간)</option>
+            <option value="3800">3.8초 (여유 - 긴 문장 천천히 말하기)</option>
+            <option value="2000">2.0초 (빠른 핑퐁 대화)</option>
+            <option value="0">🖐️ 수동 전송 모드 (말씀 후 버튼 누를 때만 전송 - 절대 먼저 안 끊김!)</option>
+          </select>
+          <small style="color: #9ca3af; font-size: 11px; margin-top: 4px; display: block;">말씀하시다 중간에 단어를 생각하셔도 AI가 말을 자르지 않고 기다려 줍니다.</small>
+        </div>
+        <div class="form-row">
           <label>제미나이 라이브 목소리</label>
           <select id="voiceSelect">
             <option value="Puck">👦 Puck (자연스러운 30대 원어민 남자 친구 - 기본)</option>
@@ -175,6 +185,6 @@
     </div>
   </div>
 
-  <script src="/app.js?v=20261117_v3"></script>
+  <script src="/app.js?v=20261117_v4"></script>
 </body>
 </html>
