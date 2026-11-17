@@ -15,7 +15,7 @@
   <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
   
-  <link rel="stylesheet" href="/style.css?v=20261117_v6">
+  <link rel="stylesheet" href="/style.css?v=20261117_v7">
 </head>
 <body>
   <div class="app-layout">
@@ -141,6 +141,16 @@
           </div>
         </div>
         <div class="form-row">
+          <label>📁 구글 드라이브 '영어 회화' 폴더 자동 연동</label>
+          <div style="display: flex; gap: 6px;">
+            <input type="text" id="gdriveWebhookInput" placeholder="https://script.google.com/macros/s/.../exec" style="flex: 1;" />
+            <button id="testGdriveBtn" class="confirm-btn" style="background: #2563eb; padding: 6px 12px; font-size: 12px; white-space: nowrap;">연결 테스트</button>
+          </div>
+          <small id="gdriveStatusText" style="color: #9ca3af; font-size: 11px; margin-top: 4px; display: block;">
+            구글 앱스 스크립트 웹앱 URL을 입력하시면 대화 일지와 마스터 노트가 내 구글 드라이브 '영어 회화' 폴더로 자동 전송됩니다.
+          </small>
+        </div>
+        <div class="form-row">
           <label>Google Gemini API Key</label>
           <input type="password" id="apiKeyInput" placeholder="AIzaSy... 또는 AQ.Ab8..." />
           <small style="color: #6b7280; font-size: 11px; margin-top: 4px; display: block;">Google AI Studio에서 발급받은 키를 입력하세요.</small>
@@ -210,6 +220,6 @@
     </div>
   </div>
 
-  <script src="/app.js?v=20261117_v6"></script>
+  <script src="/app.js?v=20261117_v7"></script>
 </body>
 </html>

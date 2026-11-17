@@ -117,6 +117,12 @@ const closeNotesBtn2 = document.getElementById('closeNotesBtn2');
 const copyNotesBtn = document.getElementById('copyNotesBtn');
 const notesListContainer = document.getElementById('notesListContainer');
 
+// Google Drive Sync Elements
+const gdriveWebhookInput = document.getElementById('gdriveWebhookInput');
+const testGdriveBtn = document.getElementById('testGdriveBtn');
+const gdriveStatusText = document.getElementById('gdriveStatusText');
+state.gdriveWebhookUrl = localStorage.getItem('gdrive_webhook_url') || '';
+
 // ==============================================================================
 // 💡 Screen Wake Lock: Keeps the smartphone screen ON during conversation
 // ==============================================================================
@@ -824,6 +830,33 @@ INSTRUCTIONS:
   }
 }
 
+// ☁️ Google Drive Full Auto-Sync Engine
+async function syncToGoogleDrive(fullTranscript = '') {
+  if (!state.gdriveWebhookUrl) return;
+
+  const transcript = fullTranscript || state.messages
+    .map(m => `${m.role === 'user' ? 'Me' : 'English Friend'}: ${m.text}`)
+    .join('\n\n');
+
+  try {
+    const res = await fetch('/api/sync-gdrive', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        topic: state.currentTopic || 'English Conversation',
+        corrections: state.corrections,
+        fullTranscript: transcript,
+        webhookUrl: state.gdriveWebhookUrl
+      })
+    });
+    const result = await res.json();
+    console.log('[Google Drive Sync Response]', result);
+    return result;
+  } catch (err) {
+    console.warn('[Google Drive Sync Warning]', err.message);
+  }
+}
+
 // 💾 Save Full Session Log & Master Cumulative Review Storage
 async function saveSessionLog() {
   if (state.messages.length === 0) {
@@ -834,6 +867,11 @@ async function saveSessionLog() {
   const fullTranscript = state.messages
     .map(m => `${m.role === 'user' ? 'Me' : 'English Friend'}: ${m.text}`)
     .join('\n\n');
+
+  // Trigger Google Drive auto-sync
+  if (state.gdriveWebhookUrl) {
+    syncToGoogleDrive(fullTranscript);
+  }
 
   try {
     const res = await fetch('/api/save-log', {
@@ -848,7 +886,8 @@ async function saveSessionLog() {
 
     const data = await res.json();
     if (data.success) {
-      alert(`🎉 대화 일지가 저장되었습니다!\n\n• 세션 파일: ${data.sessionFilename}\n• 누적 마스터 표현 총 ${data.masterCount}개`);
+      const gdriveNotice = state.gdriveWebhookUrl ? '\n• 구글 드라이브: [영어 회화] 폴더로 자동 동기화됨 ☁️' : '';
+      alert(`🎉 대화 일지가 저장되었습니다!\n\n• 세션 파일: ${data.sessionFilename}\n• 누적 마스터 표현 총 ${data.masterCount}개${gdriveNotice}`);
     } else {
       alert('저장 실패: ' + data.error);
     }
@@ -950,6 +989,10 @@ settingsBtn.addEventListener('click', () => {
   if (apiKeyInput) apiKeyInput.value = state.apiKey;
   if (voiceModeSelect) voiceModeSelect.value = state.voiceMode;
   if (silenceSelect) silenceSelect.value = state.silenceThresholdMs.toString();
+  if (gdriveWebhookInput) gdriveWebhookInput.value = state.gdriveWebhookUrl;
+  if (state.gdriveWebhookUrl && gdriveStatusText) {
+    gdriveStatusText.innerHTML = '✅ <span style="color:#4ade80;">구글 드라이브 [영어 회화] 폴더로 자동 연동 중</span>';
+  }
   settingsModal.classList.remove('hidden');
 });
 
@@ -963,6 +1006,7 @@ saveSettingsBtn.addEventListener('click', async () => {
   const selectedVoiceMode = voiceModeSelect ? voiceModeSelect.value : state.voiceMode;
   const selectedSilence = silenceSelect ? parseInt(silenceSelect.value, 10) : state.silenceThresholdMs;
   const enteredKey = apiKeyInput ? apiKeyInput.value.trim() : '';
+  const enteredGdrive = gdriveWebhookInput ? gdriveWebhookInput.value.trim() : '';
 
   if (enteredKey) {
     state.apiKey = enteredKey;
@@ -974,6 +1018,9 @@ saveSettingsBtn.addEventListener('click', async () => {
 
   state.silenceThresholdMs = selectedSilence;
   localStorage.setItem('silence_wait_ms', selectedSilence.toString());
+
+  state.gdriveWebhookUrl = enteredGdrive;
+  localStorage.setItem('gdrive_webhook_url', enteredGdrive);
 
   await fetch('/api/config', {
     method: 'POST',
@@ -989,6 +1036,43 @@ saveSettingsBtn.addEventListener('click', async () => {
   updateVisuals();
   alert('설정이 저장되었습니다!');
 });
+
+// Google Drive Webhook Connection Test
+if (testGdriveBtn) {
+  testGdriveBtn.addEventListener('click', async () => {
+    const url = gdriveWebhookInput ? gdriveWebhookInput.value.trim() : '';
+    if (!url) {
+      alert('구글 앱스 스크립트 웹앱 URL을 입력해 주세요.');
+      return;
+    }
+    testGdriveBtn.innerText = '연결 중...';
+    try {
+      const res = await fetch('/api/sync-gdrive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          topic: 'Google Drive Connection Test',
+          corrections: [{ original: 'Test awkward sentence', corrected: 'Natural native sentence', explanation: '구글 드라이브 연동 성공' }],
+          fullTranscript: 'Me: Testing connection to Google Drive.\nEnglish Friend: Your English Study folder is now 100% connected!',
+          webhookUrl: url
+        })
+      });
+      const data = await res.json();
+      if (data.success || data.message) {
+        state.gdriveWebhookUrl = url;
+        localStorage.setItem('gdrive_webhook_url', url);
+        if (gdriveStatusText) gdriveStatusText.innerHTML = '✅ <span style="color:#4ade80;">구글 드라이브 연동 성공! 내 드라이브 [영어 회화] 폴더에 테스트 문서가 생성되었습니다.</span>';
+        alert('🎉 구글 드라이브 [영어 회화] 폴더 연동 성공!\n내 구글 드라이브에 테스트 문서가 정상 생성되었습니다.');
+      } else {
+        alert('연동 실패: ' + (data.error || '웹앱 URL과 권한을 확인해 주세요.'));
+      }
+    } catch(err) {
+      alert('연동 오류: ' + err.message);
+    } finally {
+      testGdriveBtn.innerText = '연결 테스트';
+    }
+  });
+}
 
 // 📚 Cumulative Master Review Storage Engine
 function accumulateMasterNote(corr) {

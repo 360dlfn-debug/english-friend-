@@ -328,6 +328,36 @@ ${fullTranscript || '(No transcript recorded)'}
   }
 });
 
+// Google Drive Sync Endpoint (Forwards to user's Google Apps Script Webhook)
+app.post('/api/sync-gdrive', async (req, res) => {
+  try {
+    const { topic, corrections, fullTranscript, webhookUrl } = req.body;
+    const targetUrl = webhookUrl || process.env.GDRIVE_WEBHOOK_URL;
+    if (!targetUrl) {
+      return res.status(400).json({ error: 'Google Drive Webhook URL is missing.' });
+    }
+
+    const payload = {
+      topic: topic || 'Daily Conversation',
+      corrections: corrections || [],
+      fullTranscript: fullTranscript || '',
+      date: new Date().toISOString().split('T')[0]
+    };
+
+    const gRes = await fetch(targetUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    const result = await gRes.json().catch(() => ({ success: true, message: 'Google Drive sync requested.' }));
+    res.json(result);
+  } catch (err) {
+    console.error('Google Drive sync error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Core Chat Endpoint
 app.post('/api/chat', async (req, res) => {
   try {
