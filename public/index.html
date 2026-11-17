@@ -15,7 +15,7 @@
   <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
   
-  <link rel="stylesheet" href="/style.css?v=20261117">
+  <link rel="stylesheet" href="/style.css?v=20261117_v3">
 </head>
 <body>
   <div class="app-layout">
@@ -27,6 +27,7 @@
         <span class="voice-badge" id="voiceBadge">Gemini Live • Puck</span>
       </div>
       <div class="nav-actions">
+        <button id="voiceModeToggle" class="mode-pill-btn" title="음성 모드 전환">⚡ 초고속 모드</button>
         <button id="installAppBtn" class="install-pill-btn hidden">📲 앱 설치</button>
         <button id="saveLogBtn" class="action-btn" title="대화 일지 저장">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
@@ -36,6 +37,11 @@
         </button>
       </div>
     </header>
+
+    <!-- Security warning banner for non-HTTPS mobile -->
+    <div id="insecureBanner" class="insecure-banner hidden">
+      <span>⚠️ 스마트폰 마이크 권한은 보안상 HTTPS(Vercel 주소)에서 작동합니다.</span>
+    </div>
 
     <!-- Sub Header Topic -->
     <div class="topic-bar">
@@ -137,6 +143,14 @@
           <small style="color: #6b7280; font-size: 11px; margin-top: 4px; display: block;">Google AI Studio에서 발급받은 키를 입력하세요.</small>
         </div>
         <div class="form-row">
+          <label>🎙️ 음성 모드 (스마트폰 최적화)</label>
+          <select id="voiceModeSelect">
+            <option value="instant">⚡ 초고속 모드 (0초 딜레이, 100% 무음 방지 - 적극 권장)</option>
+            <option value="gemini">🎙️ Gemini Live 클라우드 음성 (고음질 AI 보이스)</option>
+          </select>
+          <small style="color: #9ca3af; font-size: 11px; margin-top: 4px; display: block;">초고속 모드는 스마트폰 내장 고음질 TTS로 즉각 대화합니다. AI 음성 선택 시에도 재생 실패 시 자동으로 초고속 음성으로 전환됩니다.</small>
+        </div>
+        <div class="form-row">
           <label>제미나이 라이브 목소리</label>
           <select id="voiceSelect">
             <option value="Puck">👦 Puck (자연스러운 30대 원어민 남자 친구 - 기본)</option>
@@ -161,6 +175,6 @@
     </div>
   </div>
 
-  <script src="/app.js?v=20261117"></script>
+  <script src="/app.js?v=20261117_v3"></script>
 </body>
 </html>

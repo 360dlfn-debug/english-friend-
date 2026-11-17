@@ -123,9 +123,14 @@ function pcmToWav(pcmBuffer, sampleRate = 24000, numChannels = 1, bitsPerSample 
 }
 
 // Generate Real Gemini Live Native Audio (24kHz Human Voice)
-async function generateLiveAudio(text, voiceName = 'Puck') {
+async function generateLiveAudio(text, voiceName = 'Puck', apiKey = '') {
   try {
-    const key = API_KEY || process.env.GEMINI_API_KEY;
+    const key = apiKey || API_KEY || process.env.GEMINI_API_KEY;
+    if (!key) {
+      console.warn('Audio generation skipped: No API Key');
+      return null;
+    }
+
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${key}`;
     const payload = {
       contents: [{ parts: [{ text }] }],
@@ -134,21 +139,28 @@ async function generateLiveAudio(text, voiceName = 'Puck') {
         speechConfig: {
           voiceConfig: {
             prebuiltVoiceConfig: {
-              voiceName: voiceName
+              voiceName: voiceName || 'Puck'
             }
           }
         }
       }
     };
 
+    // 3.5s timeout controller to prevent hanging mobile turns
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3500);
+
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      signal: controller.signal
     });
+    clearTimeout(timeoutId);
 
     if (!res.ok) {
-      console.warn('Audio generation failed status:', res.status);
+      const errBody = await res.text().catch(() => '');
+      console.warn(`[TTS] Audio generation failed (${res.status}): ${errBody.slice(0, 100)}`);
       return null;
     }
 
@@ -160,7 +172,7 @@ async function generateLiveAudio(text, voiceName = 'Puck') {
       return `data:audio/wav;base64,${wavBuffer.toString('base64')}`;
     }
   } catch (err) {
-    console.warn('Audio generation exception:', err.message);
+    console.warn('[TTS] Audio generation exception:', err.message);
   }
   return null;
 }
@@ -324,7 +336,7 @@ app.post('/api/chat', async (req, res) => {
       return res.status(400).json({ error: 'API Key is missing.' });
     }
 
-    const { messages, stealthTargets, currentTopic } = req.body;
+    const { messages, stealthTargets, currentTopic, skipAudio } = req.body;
     const modelToUse = req.body.model || CURRENT_MODEL;
     const voiceToUse = req.body.voice || CURRENT_VOICE;
 
@@ -431,9 +443,12 @@ Spoken line: "Awesome! 10 times completed. Now back to our chat: [Ask next follo
       cleanSpokenText = rawText || "Hey! I'm here. Could you say that again?";
     }
 
-    const audioDataUrl = await generateLiveAudio(cleanSpokenText, voiceToUse);
+    let audioDataUrl = null;
+    if (!skipAudio) {
+      audioDataUrl = await generateLiveAudio(cleanSpokenText, voiceToUse, key);
+    }
 
-    console.log(`[Turn in ${Date.now() - startTime}ms] Live Voice generated: ${!!audioDataUrl}`);
+    console.log(`[Turn in ${Date.now() - startTime}ms] Live Voice generated: ${!!audioDataUrl} (skipAudio: ${!!skipAudio})`);
 
     res.json({
       rawText,
