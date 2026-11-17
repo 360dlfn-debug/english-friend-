@@ -15,7 +15,7 @@
   <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
   
-  <link rel="stylesheet" href="/style.css?v=20261117_v5">
+  <link rel="stylesheet" href="/style.css?v=20261117_v6">
 </head>
 <body>
   <div class="app-layout">
@@ -28,6 +28,9 @@
       </div>
       <div class="nav-actions">
         <button id="voiceModeToggle" class="mode-pill-btn" title="음성 모드 전환">⚡ 초고속 모드</button>
+        <button id="notesBtn" class="action-btn" title="📚 누적 마스터 표현 노트">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
+        </button>
         <button id="installAppBtn" class="install-pill-btn hidden">📲 앱 설치</button>
         <button id="saveLogBtn" class="action-btn" title="대화 일지 저장">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
@@ -185,6 +188,28 @@
     </div>
   </div>
 
-  <script src="/app.js?v=20261117_v5"></script>
+  <!-- Master Cumulative Notes Modal -->
+  <div id="notesModal" class="modal-overlay hidden">
+    <div class="modal-box notes-box">
+      <div class="modal-top">
+        <h3>📚 누적 마스터 표현 노트</h3>
+        <button id="closeNotesBtn" class="close-icon">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size: 13px; color: #9ca3af; margin-bottom: 12px; line-height: 1.4;">
+          지난 모든 대화에서 틀려서 교정한 표현과 배운 단어들이 누적 저장됩니다. AI 친구는 다음 대화 때 여기에 있는 표현을 내 입에서 나오도록 집요하게 스텔스 유도합니다.
+        </p>
+        <div id="notesListContainer" class="notes-table-wrap">
+          <p style="color: #6b7280; font-size: 13px; text-align: center; padding: 20px;">아직 등록된 교정 표현이 없습니다.</p>
+        </div>
+      </div>
+      <div class="modal-bottom" style="display: flex; gap: 8px; justify-content: flex-end;">
+        <button id="copyNotesBtn" class="confirm-btn" style="background: #374151;">📋 전체 복사</button>
+        <button id="closeNotesBtn2" class="confirm-btn">닫기</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js?v=20261117_v6"></script>
 </body>
 </html>

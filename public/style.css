@@ -536,6 +536,83 @@ body {
   cursor: pointer;
 }
 
+/* Master Notes Modal Styling */
+.notes-box {
+  max-width: 500px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.notes-table-wrap {
+  overflow-x: auto;
+  overflow-y: auto;
+  max-height: 50vh;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+}
+
+.master-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  text-align: left;
+}
+
+.master-table th, .master-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  vertical-align: top;
+}
+
+.master-table th {
+  background: #181820;
+  color: var(--text-secondary);
+  font-weight: 700;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.orig-text {
+  color: #f87171;
+  text-decoration: line-through;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.target-text {
+  color: #4ade80;
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.expl-text {
+  color: #9ca3af;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.status-tag {
+  display: inline-block;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.status-tag.pending {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+}
+
+.status-tag.mastered {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+}
+
 /* Install App Button & Guide */
 .install-pill-btn {
   background: #2563eb;

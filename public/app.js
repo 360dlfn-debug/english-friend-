@@ -109,6 +109,14 @@ const apiKeyInput = document.getElementById('apiKeyInput');
 const mobileUrls = document.getElementById('mobileUrls');
 const saveLogBtn = document.getElementById('saveLogBtn');
 
+// Notes Modal Elements
+const notesBtn = document.getElementById('notesBtn');
+const notesModal = document.getElementById('notesModal');
+const closeNotesBtn = document.getElementById('closeNotesBtn');
+const closeNotesBtn2 = document.getElementById('closeNotesBtn2');
+const copyNotesBtn = document.getElementById('copyNotesBtn');
+const notesListContainer = document.getElementById('notesListContainer');
+
 // ==============================================================================
 // 💡 Screen Wake Lock: Keeps the smartphone screen ON during conversation
 // ==============================================================================
@@ -699,6 +707,7 @@ async function handleUserInput(text) {
     // Handle 10-Repetition Drill & Correction
     if (data.correction && data.correction.corrected) {
       state.corrections.push(data.correction);
+      accumulateMasterNote(data.correction); // 🌟 Automatically accumulate into Master Note without manual save!
       showDrillCard(data.correction);
     }
 
@@ -745,7 +754,14 @@ async function startSession() {
     const initRes = await fetch('/api/session-init');
     const initData = await initRes.json();
     const recentTopics = initData.recentTopics || [];
-    state.stealthTargets = initData.pendingTargets || [];
+    
+    // Load local master notes to guarantee stealth targets persist even if server is reset!
+    let localNotes = [];
+    try {
+      localNotes = JSON.parse(localStorage.getItem('master_review_notes') || '[]');
+    } catch(e) {}
+    const localPending = localNotes.filter(n => n.status !== 'mastered');
+    state.stealthTargets = localPending.length > 0 ? localPending.slice(0, 5) : (initData.pendingTargets || []);
 
     const availableTopics = TOPICS.filter(t => !recentTopics.some(rt => t.includes(rt) || rt.includes(t)));
     chosenTopic = availableTopics.length > 0 
@@ -973,6 +989,125 @@ saveSettingsBtn.addEventListener('click', async () => {
   updateVisuals();
   alert('설정이 저장되었습니다!');
 });
+
+// 📚 Cumulative Master Review Storage Engine
+function accumulateMasterNote(corr) {
+  if (!corr || !corr.corrected) return;
+
+  let notes = [];
+  try {
+    notes = JSON.parse(localStorage.getItem('master_review_notes') || '[]');
+  } catch(e) {}
+
+  const exists = notes.some(n => n.corrected.toLowerCase() === corr.corrected.toLowerCase());
+  if (!exists) {
+    const today = new Date().toISOString().split('T')[0];
+    notes.unshift({
+      dateAdded: today,
+      original: corr.original || '',
+      corrected: corr.corrected,
+      explanation: corr.explanation || '',
+      status: 'pending' // Pending stealth elicitation for next sessions!
+    });
+    localStorage.setItem('master_review_notes', JSON.stringify(notes));
+
+    // Also sync to backend in background
+    fetch('/api/save-log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        topic: state.currentTopic,
+        corrections: [corr]
+      })
+    }).catch(() => {});
+  }
+}
+
+function renderMasterNotes() {
+  let notes = [];
+  try {
+    notes = JSON.parse(localStorage.getItem('master_review_notes') || '[]');
+  } catch(e) {}
+
+  if (!notes || notes.length === 0) {
+    notesListContainer.innerHTML = `<p style="color: #6b7280; font-size: 13px; text-align: center; padding: 25px;">아직 누적된 교정 표현이 없습니다.<br>대화 중 교정받은 표현이 여기에 자동 누적됩니다.</p>`;
+    return;
+  }
+
+  let tableHtml = `
+    <table class="master-table">
+      <thead>
+        <tr>
+          <th>등록일</th>
+          <th>원래 한 말 (오류) ➔ 추천 표현</th>
+          <th>뉘앙스 설명</th>
+          <th>상태</th>
+        </tr>
+      </thead>
+      <tbody>
+  `;
+
+  notes.forEach(item => {
+    const isMastered = item.status === 'mastered';
+    const statusBadge = isMastered 
+      ? `<span class="status-tag mastered">✅ 마스터</span>` 
+      : `<span class="status-tag pending">🎯 스텔스 유도</span>`;
+
+    tableHtml += `
+      <tr>
+        <td style="color: #9ca3af; font-size: 11px;">${item.dateAdded || '-'}</td>
+        <td>
+          <div class="orig-text">${escapeHtml(item.original || '-')}</div>
+          <div class="target-text">🎯 ${escapeHtml(item.corrected)}</div>
+        </td>
+        <td class="expl-text">${escapeHtml(item.explanation || '-')}</td>
+        <td>${statusBadge}</td>
+      </tr>
+    `;
+  });
+
+  tableHtml += `</tbody></table>`;
+  notesListContainer.innerHTML = tableHtml;
+}
+
+if (notesBtn) {
+  notesBtn.addEventListener('click', () => {
+    renderMasterNotes();
+    notesModal.classList.remove('hidden');
+  });
+}
+
+if (closeNotesBtn) {
+  closeNotesBtn.addEventListener('click', () => notesModal.classList.add('hidden'));
+}
+if (closeNotesBtn2) {
+  closeNotesBtn2.addEventListener('click', () => notesModal.classList.add('hidden'));
+}
+
+if (copyNotesBtn) {
+  copyNotesBtn.addEventListener('click', () => {
+    let notes = [];
+    try {
+      notes = JSON.parse(localStorage.getItem('master_review_notes') || '[]');
+    } catch(e) {}
+
+    if (notes.length === 0) {
+      alert('복사할 표현이 없습니다.');
+      return;
+    }
+
+    let md = `# 📚 누적 복습 마스터 표현 노트\n\n`;
+    notes.forEach((n, i) => {
+      md += `${i + 1}. [원래 한 말]: ${n.original || '-'} ➔ [원어민 표현]: ${n.corrected}\n   설명: ${n.explanation || '-'}\n\n`;
+    });
+
+    navigator.clipboard.writeText(md).then(() => {
+      alert('📋 마스터 표현 노트가 클립보드에 복사되었습니다! 메모장이나 구글 드라이브/닥스에 붙여넣으실 수 있습니다.');
+    }).catch(() => {
+      alert('복사 권한 오류');
+    });
+  });
+}
 
 // Check Secure Context on Mobile
 function checkSecureContext() {

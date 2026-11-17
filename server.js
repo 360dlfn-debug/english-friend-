@@ -367,17 +367,17 @@ Keep your sentences accessible, clear, and spoken-friendly (A2~B1). Avoid overly
 <<<CORRECTION
 Original: [User's phrase]
 Corrected: [Natural Native Expression]
-Explanation: [Korean 1-sentence explanation of nuance]
+Explanation: [Korean 1-sentence explanation of nuance and reason why native speakers say this]
 CORRECTION>>>
 <<<DRILL_COUNT: 1 | TARGET: [Natural Native Expression]>>>
-Spoken line: "Instead of that, we usually say: '[Target]'. Let's practice this 10 times! Repeat after me. Number 1: [Target]"
+Spoken line: "You said '[User's phrase]', but native speakers usually say: '[Target]'. [1 brief sentence explanation of the nuance difference]. Let's practice this 10 times so it rolls off your tongue! Repeat after me. Number 1: [Target]"
 
 2. In turn-taking drill (Count 2 to 10):
 <<<DRILL_COUNT: [Count] | TARGET: [Target]>>>
 Spoken line: "Number [Count]: [Target]"
 
 3. Count 10 finished:
-Spoken line: "Awesome! 10 times completed. Now back to our chat: [Ask next follow-up question]"
+Spoken line: "Awesome! 10 times completed. Now back to our chat: [Ask next follow-up question naturally]"
 `;
 
     const geminiContents = messages.map(m => ({
