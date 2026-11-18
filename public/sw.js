@@ -1,16 +1,19 @@
-const CACHE_NAME = 'english-friend-v8';
+const CACHE_NAME = 'english-friend-v20-live';
 
 self.addEventListener('install', (e) => {
   self.skipWaiting();
 });
 
 self.addEventListener('activate', (e) => {
-  e.waitUntil(clients.claim());
+  e.waitUntil(
+    caches.keys().then((keys) =>
+      Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
+    ).then(() => clients.claim())
+  );
 });
 
 self.addEventListener('fetch', (e) => {
-  // Let network handle dynamic API requests
-  if (e.request.url.includes('/api/')) {
+  if (e.request.url.includes('/api/') || e.request.url.startsWith('ws')) {
     return;
   }
   e.respondWith(

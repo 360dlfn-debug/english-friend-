@@ -8,12 +8,12 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 let API_KEY = process.env.GEMINI_API_KEY || '';
-let CURRENT_MODEL = process.env.DEFAULT_MODEL || 'gemini-3.8-flash';
-let CURRENT_VOICE = 'Puck'; // Puck (Male), Aoede (Female)
+let CURRENT_LIVE_MODEL = process.env.LIVE_MODEL || 'models/gemini-3.8-live';
+let CURRENT_VOICE = process.env.DEFAULT_VOICE || 'Puck';
 
 // Support Vercel serverless /tmp writable directory
-const STUDY_LOGS_DIR = process.env.VERCEL 
-  ? path.join('/tmp', 'study_logs') 
+const STUDY_LOGS_DIR = process.env.VERCEL
+  ? path.join('/tmp', 'study_logs')
   : path.join(__dirname, 'study_logs');
 
 try {
@@ -24,7 +24,6 @@ try {
   console.warn('mkdir warning:', e.message);
 }
 
-// Master Cumulative Expression Storage
 const MASTER_JSON_PATH = path.join(STUDY_LOGS_DIR, 'MASTER_REVIEW_NOTES.json');
 const MASTER_MD_PATH = path.join(STUDY_LOGS_DIR, '누적_복습_표현노트.md');
 
@@ -33,7 +32,7 @@ function loadMasterNotes() {
     try {
       return JSON.parse(fs.readFileSync(MASTER_JSON_PATH, 'utf-8'));
     } catch (e) {
-      console.warn('Failed to parse MASTER_REVIEW_NOTES.json:', e);
+      console.warn('Failed to parse MASTER_REVIEW_NOTES.json:', e.message);
     }
   }
   return [];
@@ -44,13 +43,13 @@ function saveMasterNotes(notes) {
     fs.writeFileSync(MASTER_JSON_PATH, JSON.stringify(notes, null, 2), 'utf-8');
 
     let md = `# 📚 누적 복습 마스터 표현 노트\n\n`;
-    md += `> 이 파일은 지난 모든 대화에서 틀려서 교정한 표현과 배운 단어들이 누적 저장되는 단 하나의 마스터 파일입니다.\n`;
-    md += `> AI 친구는 다음 대화 때 여기에 있는 표현을 자연스럽게 내 입에서 나오도록 집요하게 스텔스 유도합니다.\n\n`;
-    md += `| 등록일 | 원래 한 말 (오류) | 원어민 추천 표현 (목표) | 뉘앙스 / 설명 | 마스터 상태 |\n`;
+    md += `> 지난 대화에서 교정받은 표현과 배운 원어민 표현이 자동 누적됩니다.\n`;
+    md += `> AI 친구는 다음 대화 때 이 표현들을 스텔스 유도하여 자연스럽게 입에 붙게 도와줍니다.\n\n`;
+    md += `| 등록일 | 원래 한 말 | 원어민 추천 표현 | 뉘앙스 / 설명 | 상태 |\n`;
     md += `| :--- | :--- | :--- | :--- | :--- |\n`;
 
     notes.forEach(item => {
-      const statusIcon = item.status === 'mastered' ? '✅ 마스터 완료' : '🎯 훈련 중 (스텔스 유도 대상)';
+      const statusIcon = item.status === 'mastered' ? '✅ 마스터' : '🎯 복습 대상';
       md += `| ${item.dateAdded || '-'} | ${item.original || '-'} | **${item.corrected}** | ${item.explanation || '-'} | ${statusIcon} |\n`;
     });
 
@@ -60,7 +59,6 @@ function saveMasterNotes(notes) {
   }
 }
 
-// Helper to get recent topics to prevent repetition
 function getRecentTopics() {
   try {
     if (!fs.existsSync(STUDY_LOGS_DIR)) return [];
@@ -76,108 +74,18 @@ function getRecentTopics() {
   }
 }
 
-// Read raw SKILL.md with robust built-in fallback
-let skillContent = `You are a real-life native English conversation partner for adults (20s-40s).
-Keep conversations engaging, casual, witty, and pre-intermediate spoken level.
-Lead 10-repetition turn-taking drills whenever correcting awkward phrasing.
-Rotate topics across 20 everyday adult themes and avoid repeating recent topics.`;
-
-try {
-  const skillPath = path.join(__dirname, 'SKILL.md');
-  if (fs.existsSync(skillPath)) {
-    skillContent = fs.readFileSync(skillPath, 'utf-8');
-  }
-} catch (e) {
-  console.warn('SKILL.md read warning:', e.message);
-}
-
-app.use(cors());
-app.use(express.json({ limit: '15mb' }));
-app.use(express.static(path.join(__dirname, 'public')));
-
-// Convert PCM 24kHz Mono 16-bit to standard WAV Buffer
-function pcmToWav(pcmBuffer, sampleRate = 24000, numChannels = 1, bitsPerSample = 16) {
-  const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
-  const blockAlign = numChannels * (bitsPerSample / 8);
-  const dataSize = pcmBuffer.length;
-  const buffer = Buffer.alloc(44 + dataSize);
-
-  buffer.write('RIFF', 0);
-  buffer.writeUInt32LE(36 + dataSize, 4);
-  buffer.write('WAVE', 8);
-
-  buffer.write('fmt ', 12);
-  buffer.writeUInt32LE(16, 16);
-  buffer.writeUInt16LE(1, 20);
-  buffer.writeUInt16LE(numChannels, 22);
-  buffer.writeUInt32LE(sampleRate, 24);
-  buffer.writeUInt32LE(byteRate, 28);
-  buffer.writeUInt16LE(blockAlign, 32);
-  buffer.writeUInt16LE(bitsPerSample, 34);
-
-  buffer.write('data', 36);
-  buffer.writeUInt32LE(dataSize, 40);
-  pcmBuffer.copy(buffer, 44);
-
-  return buffer;
-}
-
-// Generate Real Gemini Live Native Audio (24kHz Human Voice)
-async function generateLiveAudio(text, voiceName = 'Puck', apiKey = '') {
+function readSkillPrompt() {
   try {
-    const key = apiKey || API_KEY || process.env.GEMINI_API_KEY;
-    if (!key) {
-      console.warn('Audio generation skipped: No API Key');
-      return null;
+    const skillPath = path.join(__dirname, 'SKILL.md');
+    if (fs.existsSync(skillPath)) {
+      return fs.readFileSync(skillPath, 'utf-8').replace(/^---[\s\S]*?---\s*/, '').trim();
     }
-
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${key}`;
-    const payload = {
-      contents: [{ parts: [{ text }] }],
-      generationConfig: {
-        responseModalities: ['AUDIO'],
-        speechConfig: {
-          voiceConfig: {
-            prebuiltVoiceConfig: {
-              voiceName: voiceName || 'Puck'
-            }
-          }
-        }
-      }
-    };
-
-    // 3.5s timeout controller to prevent hanging mobile turns
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 3500);
-
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-      signal: controller.signal
-    });
-    clearTimeout(timeoutId);
-
-    if (!res.ok) {
-      const errBody = await res.text().catch(() => '');
-      console.warn(`[TTS] Audio generation failed (${res.status}): ${errBody.slice(0, 100)}`);
-      return null;
-    }
-
-    const data = await res.json();
-    const part = data.candidates?.[0]?.content?.parts?.[0];
-    if (part && part.inlineData && part.inlineData.data) {
-      const pcmBuffer = Buffer.from(part.inlineData.data, 'base64');
-      const wavBuffer = pcmToWav(pcmBuffer);
-      return `data:audio/wav;base64,${wavBuffer.toString('base64')}`;
-    }
-  } catch (err) {
-    console.warn('[TTS] Audio generation exception:', err.message);
+  } catch (e) {
+    console.warn('SKILL.md read warning:', e.message);
   }
-  return null;
+  return `You are a warm, witty 30s American English friend. Speak 100% natural native English ONLY (never Korean). Keep turns short (1-3 sentences) for fast ping-pong conversation. Understand natural connected speech effortlessly. When the user says something awkward, warmly say: "Hey, did you mean '...'? Native speakers usually say '[Natural Expression]'. Wanna try saying it once?"`;
 }
 
-// Network helper for IP
 function getLocalIpAddresses() {
   try {
     const interfaces = os.networkInterfaces();
@@ -196,17 +104,29 @@ function getLocalIpAddresses() {
   }
 }
 
+app.use(cors());
+app.use(express.json({ limit: '15mb' }));
+app.use(express.static(path.join(__dirname, 'public')));
+
 // Config Endpoint
 app.get('/api/config', (req, res) => {
-  const currentKey = API_KEY || process.env.GEMINI_API_KEY;
+  const currentKey = API_KEY || process.env.GEMINI_API_KEY || '';
   res.json({
     hasKey: !!currentKey,
-    currentModel: CURRENT_MODEL,
+    currentLiveModel: CURRENT_LIVE_MODEL,
     currentVoice: CURRENT_VOICE,
-    availableModels: ['gemini-3.8-flash', 'gemini-3.1-pro-preview'],
+    availableLiveModels: [
+      { id: 'models/gemini-3.8-live', name: '⚡ Gemini 3.8 Live (초고속 0.5초 원어민 라이브 - 기본)' },
+      { id: 'models/gemini-3.1-flash-live-preview', name: '🎙️ Gemini 3.1 Flash Live' },
+      { id: 'models/gemini-2.5-flash-native-audio-latest', name: '🎧 Gemini 2.5 Native Audio' }
+    ],
     availableVoices: [
-      { id: 'Puck', name: '👦 Puck (30대 원어민 남자 친구 - 기본)' },
-      { id: 'Aoede', name: '👧 Aoede (30대 원어민 여자 친구)' }
+      { id: 'Puck', name: '👦 Puck (친근한 30대 미국 남사친 - 기본)' },
+      { id: 'Aoede', name: '👧 Aoede (자연스러운 30대 미국 여사친)' },
+      { id: 'Charon', name: '🧔 Charon (차분하고 낮은 미국 남자 친구)' },
+      { id: 'Fenrir', name: '😎 Fenrir (에너지 넘치는 미국 남자 친구)' },
+      { id: 'Kore', name: '👩 Kore (또렷하고 밝은 미국 여자 친구)' },
+      { id: 'Zephyr', name: '✨ Zephyr (부드럽고 편한 미국 친구)' }
     ],
     localIps: getLocalIpAddresses(),
     port: PORT
@@ -214,14 +134,18 @@ app.get('/api/config', (req, res) => {
 });
 
 app.post('/api/config', (req, res) => {
-  const { apiKey, model, voice } = req.body;
+  const { apiKey, liveModel, voice } = req.body;
   if (apiKey) API_KEY = apiKey;
-  if (model) CURRENT_MODEL = model;
+  if (liveModel) CURRENT_LIVE_MODEL = liveModel;
   if (voice) CURRENT_VOICE = voice;
-  res.json({ success: true, currentModel: CURRENT_MODEL, currentVoice: CURRENT_VOICE });
+  res.json({
+    success: true,
+    currentLiveModel: CURRENT_LIVE_MODEL,
+    currentVoice: CURRENT_VOICE
+  });
 });
 
-// Topic Rotation & Stealth Review Target Initializer Endpoint
+// Session Initializer (Topics + Stealth Review Targets + SKILL.md)
 app.get('/api/session-init', (req, res) => {
   try {
     const recentTopics = getRecentTopics();
@@ -230,10 +154,77 @@ app.get('/api/session-init', (req, res) => {
 
     res.json({
       recentTopics,
-      pendingTargets: pendingTargets.slice(0, 5)
+      pendingTargets: pendingTargets.slice(0, 5),
+      skillPrompt: readSkillPrompt()
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Silent Out-of-Band Background Correction Extractor (0ms voice latency!)
+app.post('/api/analyze-turn', async (req, res) => {
+  try {
+    const key = req.body.apiKey || API_KEY || process.env.GEMINI_API_KEY;
+    const { userText, aiText } = req.body;
+
+    if (!key || !userText || !aiText) {
+      return res.json({ hasTip: false });
+    }
+
+    const prompt = `You analyze one exchange between a Korean English learner and their native American friend.
+User said: "${userText}"
+Friend replied: "${aiText}"
+
+Did the friend correct an unnatural/grammatically awkward phrase from the user OR explain a useful native English expression/word?
+Respond with STRICT JSON ONLY (no markdown):
+{
+  "hasTip": true or false,
+  "original": "the exact awkward phrase the user said (or the unknown word asked about)",
+  "corrected": "the natural native English expression recommended by the friend",
+  "explanation": "1 concise Korean sentence explaining the nuance or why native speakers say it this way"
+}
+If it was just normal casual chatting with NO correction or vocabulary teaching, return {"hasTip": false}.`;
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${key}`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0.1,
+          maxOutputTokens: 400,
+          responseMimeType: 'application/json',
+          thinkingConfig: { thinkingBudget: 0 }
+        }
+      }),
+      signal: controller.signal
+    });
+    clearTimeout(timer);
+
+    if (!response.ok) {
+      return res.json({ hasTip: false });
+    }
+
+    const data = await response.json();
+    const raw = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+    const parsed = JSON.parse(raw);
+
+    if (parsed && parsed.hasTip && parsed.corrected) {
+      return res.json({
+        hasTip: true,
+        original: String(parsed.original || userText).trim(),
+        corrected: String(parsed.corrected).trim(),
+        explanation: String(parsed.explanation || '').trim()
+      });
+    }
+    return res.json({ hasTip: false });
+  } catch (err) {
+    return res.json({ hasTip: false });
   }
 });
 
@@ -257,7 +248,7 @@ app.get('/api/logs', (req, res) => {
 // Save Log & Accumulate into Master Cumulative File
 app.post('/api/save-log', (req, res) => {
   try {
-    const { topic, corrections, fullTranscript, masteredTargets } = req.body;
+    const { topic, corrections, fullTranscript, masteredTargets, voice } = req.body;
     const today = new Date().toISOString().split('T')[0];
     const safeTopic = (topic || 'Daily Conversation').replace(/[\\/:*?"<>|]/g, '_');
 
@@ -269,16 +260,16 @@ app.post('/api/save-log', (req, res) => {
 ## 1. Session Information
 - **Date**: ${today}
 - **Main Topic**: ${topic || 'General Practice'}
-- **Model Used**: ${CURRENT_MODEL}
-- **Voice**: Gemini Live (${CURRENT_VOICE})
+- **Live Model**: ${CURRENT_LIVE_MODEL}
+- **Voice**: Gemini Live (${voice || CURRENT_VOICE})
 
 ## 2. Key Corrections & Targeted Expressions
 ${corrections && corrections.length > 0 ? corrections.map((c, i) => `
-### Correction ${i + 1}
+### Expression ${i + 1}
 - **Original**: "${c.original}"
 - **Native Expression**: "${c.corrected}"
 - **Explanation**: ${c.explanation || 'Natural native nuance'}
-`).join('\n') : '*No major corrections were needed today! Fantastic work!*'}
+`).join('\n') : '*Great natural conversation today!*'}
 
 ## 3. Full Conversation Transcript
 \`\`\`text
@@ -302,7 +293,7 @@ ${fullTranscript || '(No transcript recorded)'}
 
     if (corrections && Array.isArray(corrections)) {
       corrections.forEach(c => {
-        const exists = masterNotes.some(m => m.corrected.toLowerCase() === c.corrected.toLowerCase());
+        const exists = masterNotes.some(m => m.corrected.toLowerCase() === (c.corrected || '').toLowerCase());
         if (!exists && c.corrected) {
           masterNotes.push({
             dateAdded: today,
@@ -328,7 +319,7 @@ ${fullTranscript || '(No transcript recorded)'}
   }
 });
 
-// Google Drive Sync Endpoint (Forwards to user's Google Apps Script Webhook)
+// Google Drive Sync Endpoint
 app.post('/api/sync-gdrive', async (req, res) => {
   try {
     const { topic, corrections, fullTranscript, webhookUrl } = req.body;
@@ -358,158 +349,21 @@ app.post('/api/sync-gdrive', async (req, res) => {
   }
 });
 
-// Core Chat Endpoint
-app.post('/api/chat', async (req, res) => {
-  try {
-    const key = req.body.apiKey || API_KEY || process.env.GEMINI_API_KEY;
-    if (!key) {
-      return res.status(400).json({ error: 'API Key is missing.' });
-    }
-
-    const { messages, stealthTargets, currentTopic, skipAudio } = req.body;
-    const modelToUse = req.body.model || CURRENT_MODEL;
-    const voiceToUse = req.body.voice || CURRENT_VOICE;
-
-    let stealthContext = '';
-    if (stealthTargets && stealthTargets.length > 0) {
-      stealthContext = `
-[MANDATORY STEALTH REVIEW & ELICITATION TARGETS]
-The user previously struggled with these expressions (from the cumulative master study file):
-${stealthTargets.map((t, idx) => `${idx + 1}. Target Native Expression: "${t.corrected}" (Original mistake: "${t.original}")`).join('\n')}
-
-STRICT STEALTH REVIEW RULES:
-1. NEVER tell the user directly to use these words (DO NOT say "Try using X from yesterday" or "Remember word Y?").
-2. Instead, craft your conversational stories, situational prompts, and questions so naturally that the user HAS TO naturally use these expressions to answer!
-3. If the user misses the chance or says it awkwardly, DO NOT move on. Gently re-angle your question or prompt again until they either say it correctly or it gets corrected and drilled!
-`;
-    }
-
-    const systemPrompt = `
-${skillContent}
-
-${stealthContext}
-
-[DIFFICULTY: PRE-INTERMEDIATE]
-Keep your sentences accessible, clear, and spoken-friendly (A2~B1). Avoid overly academic or dense vocabulary.
-
-[APP PARSING FORMAT]
-1. When correcting an awkward/incorrect sentence:
-<<<CORRECTION
-Original: [User's phrase]
-Corrected: [Natural Native Expression]
-Explanation: [Korean 1-sentence explanation of nuance and reason why native speakers say this]
-CORRECTION>>>
-<<<DRILL_COUNT: 1 | TARGET: [Natural Native Expression]>>>
-Spoken line: "You said '[User's phrase]', but native speakers usually say: '[Target]'. [1 brief sentence explanation of the nuance difference]. Let's practice this 10 times so it rolls off your tongue! Repeat after me. Number 1: [Target]"
-
-2. In turn-taking drill (Count 2 to 10):
-<<<DRILL_COUNT: [Count] | TARGET: [Target]>>>
-Spoken line: "Number [Count]: [Target]"
-
-3. Count 10 finished:
-Spoken line: "Awesome! 10 times completed. Now back to our chat: [Ask next follow-up question naturally]"
-`;
-
-    const geminiContents = messages.map(m => ({
-      role: m.role === 'user' ? 'user' : 'model',
-      parts: [{ text: m.text }]
-    }));
-
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelToUse}:generateContent?key=${key}`;
-    
-    const payload = {
-      systemInstruction: { parts: [{ text: systemPrompt }] },
-      contents: geminiContents,
-      generationConfig: {
-        temperature: 0.7,
-        maxOutputTokens: 800
-      }
-    };
-
-    const startTime = Date.now();
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-
-    if (!response.ok) {
-      const errText = await response.text();
-      return res.status(response.status).json({ error: errText });
-    }
-
-    const data = await response.json();
-    const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-
-    let correction = null;
-    const correctionMatch = rawText.match(/<<<CORRECTION\s*([\s\S]*?)\s*CORRECTION>>>/);
-    if (correctionMatch) {
-      const block = correctionMatch[1];
-      const origMatch = block.match(/Original:\s*(.*)/i);
-      const corrMatch = block.match(/Corrected:\s*(.*)/i);
-      const expMatch = block.match(/Explanation:\s*(.*)/i);
-      correction = {
-        original: origMatch ? origMatch[1].trim() : '',
-        corrected: corrMatch ? corrMatch[1].trim() : '',
-        explanation: expMatch ? expMatch[1].trim() : ''
-      };
-    }
-
-    let drill = null;
-    const drillMatch = rawText.match(/<<<DRILL_COUNT:\s*(\d+)\s*\|\s*TARGET:\s*([^>]+)>>>/);
-    if (drillMatch) {
-      drill = {
-        count: parseInt(drillMatch[1], 10),
-        target: drillMatch[2].trim()
-      };
-    }
-
-    let cleanSpokenText = rawText
-      .replace(/<<<CORRECTION[\s\S]*?CORRECTION>>>/g, '')
-      .replace(/<<<DRILL_COUNT:[^>]+>>>/g, '')
-      .trim();
-
-    if (!cleanSpokenText) {
-      cleanSpokenText = rawText || "Hey! I'm here. Could you say that again?";
-    }
-
-    let audioDataUrl = null;
-    if (!skipAudio) {
-      audioDataUrl = await generateLiveAudio(cleanSpokenText, voiceToUse, key);
-    }
-
-    console.log(`[Turn in ${Date.now() - startTime}ms] Live Voice generated: ${!!audioDataUrl} (skipAudio: ${!!skipAudio})`);
-
-    res.json({
-      rawText,
-      cleanSpokenText,
-      correction,
-      drill,
-      audioDataUrl
-    });
-
-  } catch (err) {
-    console.error('Chat error:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // Fallback route for SPA index.html
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Local dev listening
-if (!process.env.VERCEL) {
+if (require.main === module && !process.env.VERCEL) {
   app.listen(PORT, '0.0.0.0', () => {
     const localIps = getLocalIpAddresses();
     console.log(`\n======================================================`);
-    console.log(`🚀 English Friend Pure SKILL.md Engine running!`);
+    console.log(`🚀 English Friend — Gemini 3.8 Live Native Audio Server`);
     console.log(`📱 Local PC:    http://localhost:${PORT}`);
     localIps.forEach(ip => {
       console.log(`📱 Mobile (WiFi): http://${ip}:${PORT}`);
     });
-    console.log(`🎙️  Voice: ${CURRENT_VOICE}`);
+    console.log(`🎙️  Live Model: ${CURRENT_LIVE_MODEL} | Voice: ${CURRENT_VOICE}`);
     console.log(`======================================================\n`);
   });
 }

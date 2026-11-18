@@ -1,8 +1,10 @@
 // ==============================================================================
-// 🌟 English Friend PWA - Rock-Solid Mobile & PC Voice Engine
+// 🎙️ English Friend — True Real-Time Gemini 3.8 Live Native Audio Engine
+// 100% Native Voice (Puck/Aoede) • Connected Speech (연음) • Full-Duplex Barge-in
 // ==============================================================================
 
 const DEFAULT_KEY_B64 = "QVEuQWI4Uk42S3ZEalJpTHViczdLLXB4bzNzbGRwRW0yWWNyV2kwdWRrUUZTbWJJcGF4dWc=";
+const DEFAULT_GDRIVE_WEBHOOK = "https://script.google.com/macros/s/AKfycbw3LEyYSfVxUEMX1_fv9D0Cm77E22XDUdVQPSzmPlqowsTGjpRAD-s53sX6D-hhGuJt/exec";
 
 function getInitialApiKey() {
   const saved = localStorage.getItem('gemini_api_key');
@@ -16,7 +18,7 @@ function getInitialApiKey() {
 
 function escapeHtml(str) {
   if (!str) return '';
-  return str
+  return String(str)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -24,92 +26,101 @@ function escapeHtml(str) {
     .replace(/'/g, '&#039;');
 }
 
-const state = {
-  messages: [],
-  corrections: [],
-  currentTopic: '',
-  stealthTargets: [],
-  drillActive: false,
-  drillCount: 0,
-  drillTarget: '',
-  sessionActive: false,
-  isListening: false,
-  isSpeaking: false,
-  isProcessing: false, // Critical state lock to prevent race conditions during network requests
-  voiceMode: localStorage.getItem('english_voice_mode') || 'instant', // 'instant' | 'gemini'
-  silenceThresholdMs: parseInt(localStorage.getItem('silence_wait_ms') || '2800', 10), // default 2.8s
-  currentModel: 'gemini-3.8-flash',
-  currentVoice: 'Puck',
-  apiKey: getInitialApiKey()
-};
-
-// 20-Topic Rotation Pool from SKILL.md
+// 20-Topic Rotation Pool
 const TOPICS = [
   "Tech & AI Tools (Cool new AI tools & gadgets)",
-  "Investing & Money Moves (Stocks, crypto & smart/impulse spending)",
+  "Investing & Money Moves (Stocks, crypto & smart spending)",
   "Real Estate & Living Spaces (Apartment hunting & neighborhood vibes)",
-  "Hidden Gems & Local Eats (Best comfort food & late-night cravings)",
-  "Workplace Dynamics & Office Life (Meeting fatigue & difficult boss stories)",
-  "Side Hustles & Passion Projects (Creative hobbies & turning interests into cash)",
-  "Weekend Getaways & Travel Stories (Spontaneous road trips & travel mishaps)",
-  "Health, Fitness & Wellness (Gym routines & realizing we are not in our 20s anymore)",
+  "Hidden Gems & Local Eats (Comfort food & late-night cravings)",
+  "Workplace Dynamics & Office Life (Meetings & office stories)",
+  "Side Hustles & Passion Projects (Creative hobbies & side projects)",
+  "Weekend Getaways & Travel Stories (Spontaneous trips & travel stories)",
+  "Health, Fitness & Wellness (Gym routines & energy habits)",
   "Movies, Series & Binge-Watches (Netflix favorites & classic films)",
-  "Music, Concerts & Nostalgia (Childhood jams & live concert energy)",
-  "Social Etiquette & Unspoken Rules (Splitting the bill & ghosting)",
-  "Trends & Pop Culture (Viral internet moments & generational differences)",
-  "Cars, Commuting & Traffic (Dream cars & transit stories)",
-  "Relationships & Friendships (Keeping in touch with old friends)",
-  "Food & Cooking Experiments (Kitchen fails & controversial pizza opinions)",
+  "Music, Concerts & Nostalgia (Throwback jams & live shows)",
+  "Social Etiquette & Unspoken Rules (Splitting the bill & small talk)",
+  "Trends & Pop Culture (Viral moments & generational differences)",
+  "Cars, Commuting & Traffic (Dream cars & commute stories)",
+  "Relationships & Friendships (Catching up with old friends)",
+  "Food & Cooking Experiments (Kitchen fails & food debates)",
   "Productivity vs Procrastination (Morning routines & doom-scrolling)",
   "Psychology & Human Quirks (First impressions & overthinking)",
   "Hypothetical What-If Scenarios (Winning the lottery & living abroad)",
-  "Seasonal & Holiday Vibes (Vacation energy & holiday planning)",
+  "Seasonal & Holiday Vibes (Vacation energy & holiday plans)",
   "Everyday City Life & Society (City life vs quiet country life)"
 ];
 
-// DOM Elements
-const welcomeTrigger = document.getElementById('welcomeTrigger');
-const directStartBtn = document.getElementById('directStartBtn');
-const userSpeechBlock = document.getElementById('userSpeechBlock');
-const userSpeechText = document.getElementById('userSpeechText');
-const aiSpeechBlock = document.getElementById('aiSpeechBlock');
-const aiSpeechText = document.getElementById('aiSpeechText');
-const aiRoleLabel = document.getElementById('aiRoleLabel');
+// ==============================================================================
+// 📦 Application State
+// ==============================================================================
+const state = {
+  apiKey: getInitialApiKey(),
+  liveModel: localStorage.getItem('live_model') || 'models/gemini-3.8-live',
+  voice: localStorage.getItem('live_voice') || 'Puck',
+  silenceDurationMs: parseInt(localStorage.getItem('live_silence_ms') || '900', 10),
+  bargeInSensitivity: localStorage.getItem('live_bargein') || 'START_SENSITIVITY_HIGH',
+  gdriveWebhookUrl: localStorage.getItem('gdrive_webhook_url') || DEFAULT_GDRIVE_WEBHOOK,
+
+  sessionActive: false,
+  isConnecting: false,
+  isConnected: false,
+  isMuted: false,
+  isAiSpeaking: false,
+
+  currentTopic: '',
+  skillPrompt: '',
+  stealthTargets: [],
+  messages: [],      // Finalized chronological turns: [{ role: 'model'|'user', text }]
+  corrections: [],   // Extracted tips for notes & Drive sync
+  reconnectAttempts: 0
+};
+
+// ==============================================================================
+// 🎯 DOM References
+// ==============================================================================
 const statusDot = document.getElementById('statusDot');
-const soundWave = document.getElementById('soundWave');
-const liveWaveWrap = document.getElementById('liveWaveWrap');
+const voiceBadge = document.getElementById('voiceBadge');
+const liveChip = document.getElementById('liveChip');
+const insecureBanner = document.getElementById('insecureBanner');
+const topicText = document.getElementById('topicText');
+
+const chatFeed = document.getElementById('chatFeed');
+const welcomeHero = document.getElementById('welcomeHero');
+const directStartBtn = document.getElementById('directStartBtn');
+const chatMessages = document.getElementById('chatMessages');
+
+const voiceBars = document.getElementById('voiceBars');
+const voiceBarSpans = voiceBars ? Array.from(voiceBars.querySelectorAll('span')) : [];
 const statusMsg = document.getElementById('statusMsg');
-const micBtn = document.getElementById('micBtn');
+
+const callOrbBtn = document.getElementById('callOrbBtn');
+const orbPulse = document.getElementById('orbPulse');
+const muteBtn = document.getElementById('muteBtn');
+const muteIconOn = document.getElementById('muteIconOn');
+const muteIconOff = document.getElementById('muteIconOff');
+const endCallBtn = document.getElementById('endCallBtn');
+
 const textInput = document.getElementById('textInput');
 const sendBtn = document.getElementById('sendBtn');
-const topicText = document.getElementById('topicText');
-const voiceBadge = document.getElementById('voiceBadge');
+
+// Header & Modals
 const installAppBtn = document.getElementById('installAppBtn');
-const voiceModeToggle = document.getElementById('voiceModeToggle');
-const insecureBanner = document.getElementById('insecureBanner');
-
-// Drill Elements
-const drillCard = document.getElementById('drillCard');
-const drillStepBadge = document.getElementById('drillStepBadge');
-const drillOriginalText = document.getElementById('drillOriginalText');
-const drillTargetText = document.getElementById('drillTargetText');
-const drillNoteText = document.getElementById('drillNoteText');
-const drillProgressFill = document.getElementById('drillProgressFill');
-
-// Settings Elements
+const saveLogBtn = document.getElementById('saveLogBtn');
 const settingsBtn = document.getElementById('settingsBtn');
 const settingsModal = document.getElementById('settingsModal');
 const closeSettingsBtn = document.getElementById('closeSettingsBtn');
 const saveSettingsBtn = document.getElementById('saveSettingsBtn');
-const modelSelect = document.getElementById('modelSelect');
-const voiceSelect = document.getElementById('voiceSelect');
-const voiceModeSelect = document.getElementById('voiceModeSelect');
-const silenceSelect = document.getElementById('silenceSelect');
-const apiKeyInput = document.getElementById('apiKeyInput');
-const mobileUrls = document.getElementById('mobileUrls');
-const saveLogBtn = document.getElementById('saveLogBtn');
 
-// Notes Modal Elements
+const voiceSelect = document.getElementById('voiceSelect');
+const liveModelSelect = document.getElementById('liveModelSelect');
+const silenceSelect = document.getElementById('silenceSelect');
+const bargeInSelect = document.getElementById('bargeInSelect');
+const apiKeyInput = document.getElementById('apiKeyInput');
+const gdriveWebhookInput = document.getElementById('gdriveWebhookInput');
+const testGdriveBtn = document.getElementById('testGdriveBtn');
+const gdriveStatusText = document.getElementById('gdriveStatusText');
+const mobileUrls = document.getElementById('mobileUrls');
+
 const notesBtn = document.getElementById('notesBtn');
 const notesModal = document.getElementById('notesModal');
 const closeNotesBtn = document.getElementById('closeNotesBtn');
@@ -117,47 +128,16 @@ const closeNotesBtn2 = document.getElementById('closeNotesBtn2');
 const copyNotesBtn = document.getElementById('copyNotesBtn');
 const notesListContainer = document.getElementById('notesListContainer');
 
-// Google Drive Sync Elements
-const DEFAULT_GDRIVE_WEBHOOK = "https://script.google.com/macros/s/AKfycbw3LEyYSfVxUEMX1_fv9D0Cm77E22XDUdVQPSzmPlqowsTGjpRAD-s53sX6D-hhGuJt/exec";
-const gdriveWebhookInput = document.getElementById('gdriveWebhookInput');
-const testGdriveBtn = document.getElementById('testGdriveBtn');
-const gdriveStatusText = document.getElementById('gdriveStatusText');
-state.gdriveWebhookUrl = localStorage.getItem('gdrive_webhook_url') || DEFAULT_GDRIVE_WEBHOOK;
-
 // ==============================================================================
-// 💡 Screen Wake Lock: Keeps the smartphone screen ON during conversation
+// 💡 Screen Wake Lock (Keep mobile screen awake during voice calls)
 // ==============================================================================
 let wakeLock = null;
-let wakeLockVideo = null;
-
 async function requestWakeLock() {
   try {
     if ('wakeLock' in navigator) {
       wakeLock = await navigator.wakeLock.request('screen');
-      console.log('[WakeLock] Screen Wake Lock acquired - screen will not turn off');
-    } else {
-      fallbackWakeLock();
     }
-  } catch (err) {
-    console.warn('[WakeLock] Native request failed, using video fallback:', err.message);
-    fallbackWakeLock();
-  }
-}
-
-function fallbackWakeLock() {
-  if (!wakeLockVideo) {
-    wakeLockVideo = document.createElement('video');
-    wakeLockVideo.setAttribute('playsinline', '');
-    wakeLockVideo.setAttribute('loop', '');
-    wakeLockVideo.muted = true;
-    wakeLockVideo.src = 'data:video/mp4;base64,AAAAHGZ0eXBpc29tAAAAAGlzb21tcDQxAAAACHZpZGVvAAAA';
-    wakeLockVideo.style.position = 'fixed';
-    wakeLockVideo.style.opacity = '0.001';
-    wakeLockVideo.style.pointerEvents = 'none';
-    wakeLockVideo.style.zIndex = '-1';
-    document.body.appendChild(wakeLockVideo);
-  }
-  wakeLockVideo.play().catch(() => {});
+  } catch (e) {}
 }
 
 function releaseWakeLock() {
@@ -165,15 +145,13 @@ function releaseWakeLock() {
     try { wakeLock.release(); } catch (e) {}
     wakeLock = null;
   }
-  if (wakeLockVideo) {
-    try { wakeLockVideo.pause(); } catch (e) {}
-  }
 }
 
-// Re-acquire wake lock if user switches away and returns to app
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && state.sessionActive) {
     requestWakeLock();
+    if (playbackCtx && playbackCtx.state === 'suspended') playbackCtx.resume().catch(() => {});
+    if (captureCtx && captureCtx.state === 'suspended') captureCtx.resume().catch(() => {});
   }
 });
 
@@ -189,654 +167,962 @@ if (installAppBtn) {
   installAppBtn.addEventListener('click', async () => {
     if (deferredInstallPrompt) {
       deferredInstallPrompt.prompt();
-      const choiceResult = await deferredInstallPrompt.userChoice;
-      if (choiceResult.outcome === 'accepted') {
-        installAppBtn.classList.add('hidden');
-      }
+      const res = await deferredInstallPrompt.userChoice;
+      if (res.outcome === 'accepted') installAppBtn.classList.add('hidden');
       deferredInstallPrompt = null;
     } else {
-      alert('스마트폰 브라우저 메뉴(공유 또는 점 세 개)에서 [홈 화면에 추가]를 눌러주세요!');
+      alert('브라우저 메뉴에서 [홈 화면에 추가] 또는 [앱 설치]를 눌러주세요!');
     }
   });
 }
 
 // ==============================================================================
-// 🔊 Dual Audio Engine (Web Audio API & Native SpeechSynthesis)
+// 🔊 Real-Time Audio Pipeline (16kHz Mic Capture + 24kHz Gapless PCM Playback)
 // ==============================================================================
-let audioCtx = null;
-let currentAudioSource = null;
-let isAudioUnlocked = false;
+let ws = null;
+let mediaStream = null;
+let captureCtx = null;
+let captureSource = null;
+let captureWorkletNode = null;
+let captureScriptNode = null;
 
-function getAudioContext() {
-  if (!audioCtx) {
-    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-    if (AudioContextClass) {
-      audioCtx = new AudioContextClass();
+let playbackCtx = null;
+let playbackAnalyser = null;
+let nextPlayTime = 0;
+const activeAudioSources = new Set();
+
+let currentMicRms = 0;
+let visualizerRafId = null;
+
+// Inline AudioWorklet Processor for zero-jank 16kHz downsampling & PCM16 encoding
+const WORKLET_CODE = `
+class Pcm16CaptureProcessor extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.targetRate = 16000;
+    this.chunkSamples = 1600; // 100ms at 16kHz
+    this.outBuf = new Int16Array(this.chunkSamples);
+    this.outIdx = 0;
+    this.resamplePos = 0;
+    this.lastSample = 0;
+  }
+
+  process(inputs) {
+    const input = inputs[0];
+    if (!input || !input[0] || input[0].length === 0) return true;
+    const channel = input[0];
+    const ratio = sampleRate / this.targetRate;
+
+    let sumSq = 0;
+    for (let i = 0; i < channel.length; i++) {
+      sumSq += channel[i] * channel[i];
+    }
+    const rms = Math.sqrt(sumSq / channel.length);
+
+    while (this.resamplePos < channel.length) {
+      const idx = Math.floor(this.resamplePos);
+      const frac = this.resamplePos - idx;
+      const s0 = idx === 0 && this.resamplePos < 1 ? this.lastSample : channel[idx];
+      const s1 = idx + 1 < channel.length ? channel[idx + 1] : channel[idx];
+      let sample = s0 + (s1 - s0) * frac;
+      sample = Math.max(-1, Math.min(1, sample));
+      this.outBuf[this.outIdx++] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+
+      if (this.outIdx >= this.chunkSamples) {
+        const copy = new Int16Array(this.outBuf);
+        this.port.postMessage({ pcm: copy.buffer, rms }, [copy.buffer]);
+        this.outIdx = 0;
+      }
+      this.resamplePos += ratio;
+    }
+
+    this.lastSample = channel[channel.length - 1];
+    this.resamplePos -= channel.length;
+    return true;
+  }
+}
+registerProcessor('pcm16-capture-processor', Pcm16CaptureProcessor);
+`;
+
+function initAudioContextsSync() {
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) throw new Error('이 브라우저는 Web Audio API를 지원하지 않습니다.');
+
+  if (!playbackCtx || playbackCtx.state === 'closed') {
+    try {
+      playbackCtx = new AudioCtx({ sampleRate: 24000 });
+    } catch (e) {
+      playbackCtx = new AudioCtx();
+    }
+    playbackAnalyser = playbackCtx.createAnalyser();
+    playbackAnalyser.fftSize = 64;
+    playbackAnalyser.connect(playbackCtx.destination);
+  }
+  if (playbackCtx.state === 'suspended') {
+    playbackCtx.resume().catch(() => {});
+  }
+
+  if (!captureCtx || captureCtx.state === 'closed') {
+    try {
+      captureCtx = new AudioCtx({ sampleRate: 16000 });
+    } catch (e) {
+      captureCtx = new AudioCtx();
     }
   }
-  if (audioCtx && audioCtx.state === 'suspended') {
-    audioCtx.resume();
+  if (captureCtx.state === 'suspended') {
+    captureCtx.resume().catch(() => {});
   }
-  return audioCtx;
 }
 
-// Unlock both Web Audio API & Native TTS synchronously on first touch
-function unlockAudio() {
-  requestWakeLock();
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const step = 0x8000;
+  for (let i = 0; i < bytes.length; i += step) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + step));
+  }
+  return btoa(binary);
+}
 
-  if (isAudioUnlocked) return;
-  try {
-    const ctx = getAudioContext();
-    if (ctx) {
-      const buffer = ctx.createBuffer(1, 1, 22050);
-      const source = ctx.createBufferSource();
-      source.buffer = buffer;
-      source.connect(ctx.destination);
-      source.start(0);
+function sendPcmChunkToLive(pcmArrayBuffer) {
+  if (!ws || ws.readyState !== WebSocket.OPEN || !state.isConnected || state.isMuted) {
+    return;
+  }
+  const base64Data = arrayBufferToBase64(pcmArrayBuffer);
+  ws.send(JSON.stringify({
+    realtimeInput: {
+      audio: {
+        mimeType: 'audio/pcm;rate=16000',
+        data: base64Data
+      }
     }
-  } catch (e) {}
-
-  try {
-    if (window.speechSynthesis) {
-      const silent = new SpeechSynthesisUtterance(' ');
-      silent.volume = 0.01;
-      silent.rate = 2.0;
-      window.speechSynthesis.speak(silent);
-    }
-  } catch (e) {}
-
-  isAudioUnlocked = true;
-  console.log('[Audio] Successfully unlocked audio subsystem on mobile gesture!');
+  }));
 }
 
-function stopAudioPlayback() {
-  if (currentAudioSource) {
-    try {
-      currentAudioSource.stop();
-      currentAudioSource.disconnect();
-    } catch (e) {}
-    currentAudioSource = null;
-  }
-  if (window.speechSynthesis) {
-    try {
-      window.speechSynthesis.cancel();
-    } catch (e) {}
-  }
-  state.isSpeaking = false;
-  updateVisuals();
-}
+async function startMicCapture() {
+  if (mediaStream) return;
 
-// 1. Play 24kHz Gemini Cloud Audio via Web Audio API (immune to mobile autoplay blocks)
-async function playLiveAudioBuffer(dataUrl) {
-  const ctx = getAudioContext();
-  if (!ctx) throw new Error('Web Audio API not supported');
+  mediaStream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+      channelCount: 1
+    },
+    video: false
+  });
 
-  const base64 = dataUrl.split(',')[1];
-  const binaryString = window.atob(base64);
-  const len = binaryString.length;
-  const bytes = new Uint8Array(len);
-  for (let i = 0; i < len; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
+  if (captureCtx.state === 'suspended') {
+    await captureCtx.resume();
   }
 
-  const audioBuffer = await ctx.decodeAudioData(bytes.buffer.slice(0));
+  captureSource = captureCtx.createMediaStreamSource(mediaStream);
 
-  return new Promise((resolve, reject) => {
+  // Prefer AudioWorklet (off-main-thread, silky smooth on mobile)
+  if (captureCtx.audioWorklet && window.AudioWorkletNode) {
     try {
-      const source = ctx.createBufferSource();
-      source.buffer = audioBuffer;
-      source.connect(ctx.destination);
-      currentAudioSource = source;
+      const blob = new Blob([WORKLET_CODE], { type: 'application/javascript' });
+      const workletUrl = URL.createObjectURL(blob);
+      await captureCtx.audioWorklet.addModule(workletUrl);
+      URL.revokeObjectURL(workletUrl);
 
-      source.onended = () => {
-        currentAudioSource = null;
-        resolve();
+      captureWorkletNode = new AudioWorkletNode(captureCtx, 'pcm16-capture-processor');
+      captureWorkletNode.port.onmessage = (ev) => {
+        const { pcm, rms } = ev.data;
+        currentMicRms = state.isMuted ? 0 : rms;
+        sendPcmChunkToLive(pcm);
       };
 
-      source.start(0);
+      // Connect through a zero-gain sink so browser keeps processing the audio graph without echoing mic
+      const silentGain = captureCtx.createGain();
+      silentGain.gain.value = 0;
+      captureSource.connect(captureWorkletNode);
+      captureWorkletNode.connect(silentGain);
+      silentGain.connect(captureCtx.destination);
+      return;
     } catch (err) {
-      reject(err);
+      console.warn('[Mic] AudioWorklet fallback to ScriptProcessor:', err.message);
     }
-  });
+  }
+
+  // Fallback for older browsers
+  const bufferSize = 2048;
+  captureScriptNode = captureCtx.createScriptProcessor(bufferSize, 1, 1);
+  const inputRate = captureCtx.sampleRate;
+  const ratio = inputRate / 16000;
+
+  captureScriptNode.onaudioprocess = (e) => {
+    const input = e.inputBuffer.getChannelData(0);
+    let sumSq = 0;
+    for (let i = 0; i < input.length; i++) sumSq += input[i] * input[i];
+    currentMicRms = state.isMuted ? 0 : Math.sqrt(sumSq / input.length);
+
+    const outLen = Math.floor(input.length / ratio);
+    const pcm16 = new Int16Array(outLen);
+    for (let i = 0; i < outLen; i++) {
+      const pos = i * ratio;
+      const idx = Math.floor(pos);
+      const frac = pos - idx;
+      const s0 = input[idx] || 0;
+      const s1 = input[idx + 1] !== undefined ? input[idx + 1] : s0;
+      const s = Math.max(-1, Math.min(1, s0 + (s1 - s0) * frac));
+      pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+    }
+    sendPcmChunkToLive(pcm16.buffer);
+  };
+
+  const silentGain = captureCtx.createGain();
+  silentGain.gain.value = 0;
+  captureSource.connect(captureScriptNode);
+  captureScriptNode.connect(silentGain);
+  silentGain.connect(captureCtx.destination);
 }
 
-// 2. Play Ultra-Fast Native Browser TTS (Zero lag, 100% works offline on any smartphone)
-function speakNativeText(text) {
-  return new Promise((resolve) => {
-    if (!window.speechSynthesis) return resolve();
-
-    window.speechSynthesis.cancel();
-
-    const clean = text
-      .replace(/<<<[^>]*>>>/g, '')
-      .replace(/\[[^\]]*\]/g, '')
-      .replace(/\*/g, '')
-      .trim();
-
-    if (!clean) return resolve();
-
-    const utterance = new SpeechSynthesisUtterance(clean);
-    utterance.lang = 'en-US';
-    utterance.rate = 1.0;
-    utterance.pitch = 1.0;
-
-    const voices = window.speechSynthesis.getVoices();
-    const naturalVoice = voices.find(v => v.lang.startsWith('en') && (
-      v.name.includes('Samantha') || 
-      v.name.includes('Daniel') || 
-      v.name.includes('Ava') || 
-      v.name.includes('Google US') || 
-      v.name.includes('Natural') || 
-      v.name.includes('en-US')
-    )) || voices.find(v => v.lang.startsWith('en')) || null;
-
-    if (naturalVoice) utterance.voice = naturalVoice;
-
-    let hasEnded = false;
-    const endHandler = () => {
-      if (!hasEnded) {
-        hasEnded = true;
-        resolve();
-      }
-    };
-
-    utterance.onend = endHandler;
-    utterance.onerror = (e) => {
-      console.warn('Native speech error:', e);
-      endHandler();
-    };
-
-    const wordCount = clean.split(/\s+/).length;
-    const estimatedMs = Math.max(1800, (wordCount / 2.5) * 1000 + 1000);
-    setTimeout(endHandler, estimatedMs);
-
-    window.speechSynthesis.speak(utterance);
-
-    if (window.speechSynthesis.paused) {
-      window.speechSynthesis.resume();
-    }
-  });
-}
-
-// 🌟 Unified Speech Output: Guarantees speech output and never stays silent!
-async function playAiSpeech(spokenText, audioDataUrl) {
-  stopAudioPlayback();
-  state.isSpeaking = true;
-  state.isProcessing = false;
-  updateVisuals();
-
-  try {
-    if (state.voiceMode === 'gemini' && audioDataUrl) {
-      statusMsg.innerText = `🎙️ Gemini Live (${state.currentVoice}) 말하는 중...`;
-      try {
-        await playLiveAudioBuffer(audioDataUrl);
-      } catch (err) {
-        console.warn('[Audio] Gemini Live audio buffer failed, instant fallback to native voice:', err);
-        statusMsg.innerText = `⚡ 네이티브 음성으로 재생 중...`;
-        await speakNativeText(spokenText);
-      }
-    } else {
-      statusMsg.innerText = `⚡ 친구가 말하는 중...`;
-      await speakNativeText(spokenText);
-    }
-  } catch (err) {
-    console.warn('[Audio] Playback exception:', err);
-  } finally {
-    state.isSpeaking = false;
-    updateVisuals();
-    if (state.drillActive) {
-      statusMsg.innerText = `🎯 10회 반복 중 (${state.drillCount}/10) • 따라 말씀하세요!`;
-    } else {
-      statusMsg.innerText = '🔴 듣고 있습니다 • 영어로 말씀하세요!';
-    }
-    if (state.sessionActive && !state.isProcessing) {
-      // 250ms buffer to prevent phone speaker sound feedback
-      setTimeout(startListeningSafe, 250);
-    }
+function stopMicCapture() {
+  currentMicRms = 0;
+  if (captureWorkletNode) {
+    try { captureWorkletNode.disconnect(); } catch (e) {}
+    captureWorkletNode = null;
+  }
+  if (captureScriptNode) {
+    try { captureScriptNode.disconnect(); } catch (e) {}
+    captureScriptNode = null;
+  }
+  if (captureSource) {
+    try { captureSource.disconnect(); } catch (e) {}
+    captureSource = null;
+  }
+  if (mediaStream) {
+    mediaStream.getTracks().forEach(t => {
+      try { t.stop(); } catch (e) {}
+    });
+    mediaStream = null;
   }
 }
 
-// ==============================================================================
-// 🎙️ Real-time Speech Recognition Engine (Continuous Real-time Streaming)
-// ==============================================================================
-const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-let recognition = null;
-let silenceTimer = null;
-let currentRecordedText = '';
-let accumulatedTranscript = '';
-let isRecognitionStarting = false;
-
-function setupSpeechRecognition() {
-  if (!SpeechRecognition) {
-    alert('이 브라우저는 실시간 음성 인식을 지원하지 않습니다. Chrome 또는 Safari에서 열어주세요.');
-    return;
+// Schedule incoming 24kHz PCM16 chunk gaplessly onto Web Audio timeline
+function enqueuePcm24kAudio(base64Pcm) {
+  if (!playbackCtx || !base64Pcm) return;
+  if (playbackCtx.state === 'suspended') {
+    playbackCtx.resume().catch(() => {});
   }
 
-  recognition = new SpeechRecognition();
-  recognition.lang = 'en-US';
-  recognition.interimResults = true;
-  recognition.continuous = true; // continuous streaming for instant live-typing!
+  const binary = atob(base64Pcm);
+  const byteLen = binary.length;
+  const bytes = new Uint8Array(byteLen);
+  for (let i = 0; i < byteLen; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
 
-  recognition.onstart = () => {
-    isRecognitionStarting = false;
-    state.isListening = true;
+  const numSamples = Math.floor(byteLen / 2);
+  if (numSamples === 0) return;
+
+  const view = new DataView(bytes.buffer);
+  const float32 = new Float32Array(numSamples);
+  for (let i = 0; i < numSamples; i++) {
+    float32[i] = view.getInt16(i * 2, true) / 32768;
+  }
+
+  const audioBuffer = playbackCtx.createBuffer(1, numSamples, 24000);
+  audioBuffer.getChannelData(0).set(float32);
+
+  const source = playbackCtx.createBufferSource();
+  source.buffer = audioBuffer;
+  source.connect(playbackAnalyser || playbackCtx.destination);
+
+  const now = playbackCtx.currentTime;
+  if (nextPlayTime < now + 0.015) {
+    nextPlayTime = now + 0.02;
+  }
+
+  source.start(nextPlayTime);
+  nextPlayTime += audioBuffer.duration;
+
+  activeAudioSources.add(source);
+  if (!state.isAiSpeaking) {
+    state.isAiSpeaking = true;
     updateVisuals();
-    userSpeechBlock.classList.remove('hidden');
+  }
 
-    if (!currentRecordedText.trim() && !accumulatedTranscript.trim()) {
-      userSpeechText.innerHTML = `<span style="color:#6b7280;">듣고 있습니다... 말씀해 보세요</span> <span class="typing-cursor"></span>`;
-    }
-    if (state.drillActive) {
-      statusMsg.innerText = `🎯 10회 반복 중 (${state.drillCount}/10) • AI 말을 듣고 따라 하세요!`;
-    } else {
-      const waitSeconds = state.silenceThresholdMs > 0 ? (state.silenceThresholdMs / 1000).toFixed(1) : '수동';
-      statusMsg.innerText = state.silenceThresholdMs > 0 
-        ? `🔴 듣고 있습니다 • 말씀 후 ${waitSeconds}초 멈추시면 답변합니다`
-        : `🔴 듣고 있습니다 • 말씀 완료 후 마이크를 터치해 주세요`;
-    }
-  };
-
-  recognition.onresult = (event) => {
-    let finalTranscript = '';
-    let interimTranscript = '';
-
-    for (let i = 0; i < event.results.length; ++i) {
-      const res = event.results[i];
-      if (res.isFinal) {
-        finalTranscript += res[0].transcript + ' ';
-      } else {
-        interimTranscript += res[0].transcript;
-      }
-    }
-
-    const activeChunk = (finalTranscript + interimTranscript).trim();
-    if (activeChunk) {
-      const fullConfirmed = accumulatedTranscript ? `${accumulatedTranscript} ${finalTranscript}`.trim() : finalTranscript.trim();
-      const fullDisplay = (accumulatedTranscript ? `${accumulatedTranscript} ${activeChunk}` : activeChunk).trim();
-      currentRecordedText = fullDisplay;
-
-      // 🌟 Live Real-time Typing Stream: Confirmed words in clean blue, interim words highlighted with glowing cursor!
-      let displayHtml = '';
-      if (fullConfirmed) {
-        displayHtml += escapeHtml(fullConfirmed) + ' ';
-      }
-      if (interimTranscript.trim()) {
-        displayHtml += `<span class="live-interim">${escapeHtml(interimTranscript.trim())}</span> `;
-      }
-      displayHtml += `<span class="typing-cursor"></span>`;
-      userSpeechText.innerHTML = displayHtml;
-
-      micBtn.classList.add('has-speech');
-
-      if (state.drillActive) {
-        statusMsg.innerText = `🎯 10회 반복 중 (${state.drillCount}/10) • 따라하시면 즉시 카운트됩니다!`;
-      } else if (state.silenceThresholdMs > 0) {
-        statusMsg.innerText = `🎙️ 듣는 중... (말씀을 멈추시면 ${(state.silenceThresholdMs / 1000).toFixed(1)}초 후 자동 전송)`;
-      } else {
-        statusMsg.innerText = `🎙️ 듣는 중... (말씀 후 중앙 마이크를 누르시면 전송됩니다)`;
-      }
-    }
-
-    // ⚡ Drill mode uses ultra-responsive 0.65s wait time; Regular mode uses user setting
-    const waitTime = state.drillActive ? 650 : state.silenceThresholdMs;
-    clearTimeout(silenceTimer);
-    if (waitTime > 0) {
-      silenceTimer = setTimeout(() => {
-        if ((currentRecordedText.trim() || accumulatedTranscript.trim()) && !state.isSpeaking && !state.isProcessing && state.sessionActive) {
-          submitSpeech();
-        }
-      }, waitTime);
-    }
-  };
-
-  recognition.onerror = (event) => {
-    isRecognitionStarting = false;
-    state.isListening = false;
-    updateVisuals();
-
-    if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-      statusMsg.innerText = '⚠️ 마이크 권한이 차단되었습니다. 브라우저 설정에서 마이크를 허용해 주세요.';
-      return;
-    }
-
-    if (state.sessionActive && !state.isSpeaking && !state.isProcessing) {
-      setTimeout(startListeningSafe, 250);
-    }
-  };
-
-  recognition.onend = () => {
-    isRecognitionStarting = false;
-    state.isListening = false;
-    updateVisuals();
-
-    if (!state.sessionActive || state.isSpeaking || state.isProcessing) {
-      return;
-    }
-
-    // Preserve words and seamlessly keep listening across mobile disconnects
-    if (currentRecordedText.trim()) {
-      accumulatedTranscript = currentRecordedText.trim();
-      setTimeout(startListeningSafe, 100);
-    } else {
-      setTimeout(startListeningSafe, 150);
+  source.onended = () => {
+    activeAudioSources.delete(source);
+    if (activeAudioSources.size === 0) {
+      state.isAiSpeaking = false;
+      updateVisuals();
     }
   };
 }
 
-// ⚡ Central Speech Submission
-function submitSpeech() {
-  if (state.isProcessing || state.isSpeaking) return;
-
-  const textToSend = (currentRecordedText || accumulatedTranscript).trim();
-  currentRecordedText = '';
-  accumulatedTranscript = '';
-  clearTimeout(silenceTimer);
-  stopListeningSafe();
-
-  if (textToSend) {
-    // If in 10-repetition drill, handle locally in 0.1s without 5-second network API delay!
-    if (state.drillActive) {
-      handleDrillRepetition(textToSend);
-    } else {
-      handleUserInput(textToSend);
-    }
-  } else if (state.sessionActive && !state.isSpeaking && !state.isProcessing) {
-    startListeningSafe();
-  }
-}
-
-// ==============================================================================
-// 🎯 10-Repetition Drill Engine (Instant 0.2s Response - No 5s lag!)
-// ==============================================================================
-async function handleDrillRepetition(userText) {
-  state.isProcessing = true;
-  userSpeechText.innerHTML = `${escapeHtml(userText)}`;
-  userSpeechBlock.classList.remove('hidden');
-
-  state.drillCount = (state.drillCount || 1) + 1;
-  updateDrillCardProgress(state.drillCount);
-
-  if (state.drillCount <= 10) {
-    const drillPrompt = `Number ${state.drillCount}: ${state.drillTarget}`;
-    aiSpeechText.innerText = drillPrompt;
-    aiSpeechBlock.classList.remove('hidden');
-
-    // ⚡ Instant 0.1s response!
-    await playAiSpeech(drillPrompt, null);
-  } else {
-    // 10 times fully completed!
-    const finishPrompt = `Awesome! 10 times completed! Great job.`;
-    aiSpeechText.innerText = finishPrompt;
-    aiSpeechBlock.classList.remove('hidden');
-    finishDrill();
-
-    await playAiSpeech(finishPrompt, null);
-
-    // Naturally resume conversation with Gemini
-    setTimeout(() => {
-      handleUserInput(`[I completed the 10-repetition drill for "${state.drillTarget}"]. Let's continue our talk!`);
-    }, 500);
-  }
-}
-
-function showDrillCard(corr) {
-  state.drillActive = true;
-  state.drillCount = 1;
-  state.drillTarget = corr.corrected;
-  drillCard.classList.remove('hidden');
-  drillOriginalText.innerText = corr.original || 'User speech';
-  drillTargetText.innerText = corr.corrected || '';
-  drillNoteText.innerText = corr.explanation ? `💡 ${corr.explanation}` : '';
-  updateDrillCardProgress(1);
-}
-
-function updateDrillCardProgress(count) {
-  state.drillCount = count;
-  drillStepBadge.innerText = `Count ${count} / 10`;
-  const pct = Math.min(100, Math.round((count / 10) * 100));
-  drillProgressFill.style.width = `${pct}%`;
-}
-
-function finishDrill() {
-  state.drillActive = false;
-  drillStepBadge.innerText = '✅ 10회 완료!';
-  drillProgressFill.style.width = '100%';
-  setTimeout(() => {
-    drillCard.classList.add('hidden');
-  }, 2500);
-}
-
-function startListeningSafe() {
-  if (state.isSpeaking || state.isProcessing || !state.sessionActive || isRecognitionStarting) {
-    return;
-  }
-  stopAudioPlayback();
-
-  if (recognition && !state.isListening) {
+// Immediately kill all playing & queued AI audio (Instant Barge-in!)
+function stopAllAiAudio() {
+  for (const src of activeAudioSources) {
     try {
-      isRecognitionStarting = true;
-      recognition.start();
-    } catch (e) {
-      isRecognitionStarting = false;
-    }
+      src.onended = null;
+      src.stop();
+      src.disconnect();
+    } catch (e) {}
   }
-}
-
-function stopListeningSafe() {
-  state.isListening = false;
-  isRecognitionStarting = false;
-  clearTimeout(silenceTimer);
-  if (recognition) {
-    try { recognition.abort(); } catch (e) {}
-  }
+  activeAudioSources.clear();
+  nextPlayTime = 0;
+  state.isAiSpeaking = false;
   updateVisuals();
 }
 
-function updateVisuals() {
-  statusDot.classList.remove('listening', 'speaking');
-  soundWave.classList.remove('active');
-  micBtn.classList.remove('listening', 'speaking', 'has-speech', 'processing');
+// Live Visualizer Animation Loop (drives 7 bars & orb pulse from real audio!)
+function startVisualizerLoop() {
+  if (visualizerRafId) return;
+  const freqData = new Uint8Array(32);
 
-  if (state.isProcessing) {
-    micBtn.classList.add('processing');
-    soundWave.classList.add('active');
-  } else if (state.isSpeaking) {
-    statusDot.classList.add('speaking');
-    micBtn.classList.add('speaking');
-    soundWave.classList.add('active');
-  } else if (state.isListening) {
-    statusDot.classList.add('listening');
-    micBtn.classList.add('listening');
-    if (currentRecordedText.trim() || accumulatedTranscript.trim()) {
-      micBtn.classList.add('has-speech');
-    }
-    soundWave.classList.add('active');
-  }
+  function frame() {
+    visualizerRafId = requestAnimationFrame(frame);
 
-  // Update Voice Mode Toggle UI
-  if (voiceModeToggle) {
-    if (state.voiceMode === 'instant') {
-      voiceModeToggle.innerText = '⚡ 초고속 모드';
-      voiceModeToggle.classList.remove('gemini');
-    } else {
-      voiceModeToggle.innerText = '🎙️ AI 음성 모드';
-      voiceModeToggle.classList.add('gemini');
+    let level = 0;
+    if (state.isAiSpeaking && playbackAnalyser) {
+      playbackAnalyser.getByteFrequencyData(freqData);
+      let sum = 0;
+      for (let i = 0; i < 16; i++) sum += freqData[i];
+      level = Math.min(1, (sum / 16) / 140);
+    } else if (state.isConnected && !state.isMuted) {
+      level = Math.min(1, currentMicRms * 7.5);
+    }
+
+    const weights = [0.45, 0.75, 1.0, 0.85, 1.0, 0.72, 0.45];
+    voiceBarSpans.forEach((span, idx) => {
+      const jitter = state.sessionActive ? (0.85 + Math.random() * 0.3) : 1;
+      const h = state.sessionActive ? Math.max(4, Math.round(4 + level * 16 * weights[idx] * jitter)) : 4;
+      span.style.height = `${h}px`;
+    });
+
+    if (orbPulse) {
+      const scale = state.sessionActive ? (1 + level * 0.24) : 1;
+      orbPulse.style.transform = `scale(${scale.toFixed(3)})`;
     }
   }
+  frame();
 }
 
 // ==============================================================================
-// 💬 Handle User Speech / Text Input Turn
+// 💬 Chronological Real-Time Scrolling Chat Feed (AI -> User -> AI -> User)
 // ==============================================================================
-async function handleUserInput(text) {
-  if (!text || !text.trim() || state.isProcessing) return;
+let activeUserBubble = null; // { row, bubble, text }
+let activeAiBubble = null;   // { row, bubble, text }
+let lastFinalizedUserText = '';
 
-  state.isProcessing = true;
-  stopAudioPlayback();
-  stopListeningSafe();
+function scrollChatToBottom(force = false) {
+  if (!chatFeed) return;
+  const distFromBottom = chatFeed.scrollHeight - chatFeed.scrollTop - chatFeed.clientHeight;
+  if (force || distFromBottom < 180) {
+    requestAnimationFrame(() => {
+      chatFeed.scrollTop = chatFeed.scrollHeight;
+    });
+  }
+}
 
-  userSpeechText.innerHTML = `${escapeHtml(text)}`;
-  userSpeechBlock.classList.remove('hidden');
-  state.messages.push({ role: 'user', text });
+function addSystemPill(text) {
+  const pill = document.createElement('div');
+  pill.className = 'system-pill';
+  pill.textContent = text;
+  chatMessages.appendChild(pill);
+  scrollChatToBottom(true);
+}
 
-  statusMsg.innerText = '⚡ 생각하는 중...';
-  updateVisuals();
+function normalizeStreamingText(text) {
+  return text.replace(/\s{2,}/g, ' ').replace(/^\s+/, '');
+}
 
+function ensureUserBubble() {
+  // Always finalize any open AI bubble first so User appears cleanly BELOW AI
+  if (activeAiBubble) {
+    finalizeAiBubble(false);
+  }
+  if (activeUserBubble) return activeUserBubble;
+
+  const row = document.createElement('div');
+  row.className = 'msg-row user streaming';
+
+  const meta = document.createElement('div');
+  meta.className = 'msg-meta';
+  meta.innerHTML = `<span class="msg-sender">Me</span>`;
+
+  const bubble = document.createElement('div');
+  bubble.className = 'msg-bubble';
+  bubble.textContent = '';
+
+  row.appendChild(meta);
+  row.appendChild(bubble);
+  chatMessages.appendChild(row);
+
+  activeUserBubble = { row, bubble, text: '' };
+  scrollChatToBottom(true);
+  return activeUserBubble;
+}
+
+function appendUserTranscript(delta) {
+  if (!delta) return;
+  const b = ensureUserBubble();
+  b.text = normalizeStreamingText(b.text + delta);
+  b.bubble.textContent = b.text;
+  scrollChatToBottom(false);
+}
+
+function finalizeUserBubble() {
+  if (!activeUserBubble) return null;
+  const finalized = activeUserBubble;
+  activeUserBubble = null;
+
+  finalized.row.classList.remove('streaming');
+  const cleanText = finalized.text.trim();
+  if (!cleanText) {
+    finalized.row.remove();
+    return null;
+  }
+
+  finalized.bubble.textContent = cleanText;
+  lastFinalizedUserText = cleanText;
+  state.messages.push({ role: 'user', text: cleanText });
+  return finalized;
+}
+
+function ensureAiBubble() {
+  // Always finalize any open User bubble first so AI appears cleanly BELOW User
+  if (activeUserBubble) {
+    finalizeUserBubble();
+  }
+  if (activeAiBubble) return activeAiBubble;
+
+  const row = document.createElement('div');
+  row.className = 'msg-row ai streaming';
+
+  const avatarLetter = (state.voice || 'P')[0].toUpperCase();
+  const meta = document.createElement('div');
+  meta.className = 'msg-meta';
+  meta.innerHTML = `
+    <span class="msg-avatar">${escapeHtml(avatarLetter)}</span>
+    <span class="msg-sender">${escapeHtml(state.voice)}</span>
+  `;
+
+  const bubble = document.createElement('div');
+  bubble.className = 'msg-bubble';
+  bubble.textContent = '';
+
+  row.appendChild(meta);
+  row.appendChild(bubble);
+  chatMessages.appendChild(row);
+
+  activeAiBubble = { row, bubble, text: '' };
+  scrollChatToBottom(true);
+  return activeAiBubble;
+}
+
+function appendAiTranscript(delta) {
+  if (!delta) return;
+  // Filter out accidental Hangul if any ever appeared in transcription
+  const cleanDelta = delta.replace(/[\u3131-\u318E\uAC00-\uD7A3]+/g, '');
+  if (!cleanDelta) return;
+
+  const b = ensureAiBubble();
+  b.text = normalizeStreamingText(b.text + cleanDelta);
+  b.bubble.textContent = b.text;
+  scrollChatToBottom(false);
+}
+
+function finalizeAiBubble(wasInterrupted = false) {
+  if (!activeAiBubble) return null;
+  const finalized = activeAiBubble;
+  activeAiBubble = null;
+
+  finalized.row.classList.remove('streaming');
+  const cleanText = finalized.text.trim();
+  if (!cleanText) {
+    finalized.row.remove();
+    return null;
+  }
+
+  finalized.bubble.textContent = cleanText;
+  if (wasInterrupted) {
+    const tag = document.createElement('span');
+    tag.className = 'msg-interrupted-tag';
+    tag.textContent = '• 끼어듦';
+    finalized.bubble.appendChild(tag);
+  }
+
+  state.messages.push({ role: 'model', text: cleanText });
+  return { row: finalized.row, text: cleanText };
+}
+
+function renderInlineTipCard(aiRowEl, tip) {
+  if (!aiRowEl || !tip || !tip.corrected) return;
+  const card = document.createElement('div');
+  card.className = 'tip-card';
+  card.innerHTML = `
+    <div class="tip-card-header">✨ 원어민 표현 팁 • 마스터 노트 자동 저장</div>
+    ${tip.original ? `<div class="tip-orig">${escapeHtml(tip.original)}</div>` : ''}
+    <div class="tip-native">👉 ${escapeHtml(tip.corrected)}</div>
+    ${tip.explanation ? `<div class="tip-expl">💡 ${escapeHtml(tip.explanation)}</div>` : ''}
+  `;
+  aiRowEl.appendChild(card);
+  scrollChatToBottom(false);
+}
+
+// Silent background analyzer (0ms impact on live voice speed!)
+async function analyzeTurnInBackground(userText, aiText, aiRowEl) {
+  if (!userText || !aiText || userText.length < 4) return;
   try {
-    const res = await fetch('/api/chat', {
+    const res = await fetch('/api/analyze-turn', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        messages: state.messages,
-        model: state.currentModel,
-        voice: state.currentVoice,
-        apiKey: state.apiKey,
-        stealthTargets: state.stealthTargets,
-        currentTopic: state.currentTopic,
-        skipAudio: state.voiceMode === 'instant'
+        userText,
+        aiText,
+        apiKey: state.apiKey
       })
     });
-
-    const data = await res.json();
-    if (!res.ok) {
-      const errMsg = (data && data.error) ? data.error : 'API Connection Error';
-      throw new Error(errMsg);
+    const tip = await res.json();
+    if (tip && tip.hasTip && tip.corrected) {
+      state.corrections.push(tip);
+      accumulateMasterNote(tip);
+      renderInlineTipCard(aiRowEl, tip);
     }
-
-    const spokenText = (data.cleanSpokenText && data.cleanSpokenText.trim()) 
-      || (data.rawText && data.rawText.trim()) 
-      || "I hear you! Let's keep talking.";
-
-    aiSpeechText.innerText = spokenText;
-    aiSpeechBlock.classList.remove('hidden');
-    state.messages.push({ role: 'model', text: spokenText });
-
-    // Handle 10-Repetition Drill & Correction
-    if (data.correction && data.correction.corrected) {
-      state.corrections.push(data.correction);
-      accumulateMasterNote(data.correction); // 🌟 Automatically accumulate into Master Note without manual save!
-      showDrillCard(data.correction);
-    }
-
-    // 🌟 Play Audio with 100% Failover guarantee!
-    await playAiSpeech(spokenText, data.audioDataUrl);
-
-  } catch (err) {
-    console.error('Chat error:', err);
-    state.isProcessing = false;
-    state.isSpeaking = false;
-
-    if (err.message && err.message.includes('API key')) {
-      aiSpeechText.innerText = "Google AI Studio API 키 오류입니다. 우측 상단 ⚙️ 설정에서 키를 확인해 주세요.";
-    } else {
-      aiSpeechText.innerText = "Sorry, I missed that for a second. Could you say that again?";
-    }
-    aiSpeechBlock.classList.remove('hidden');
-    statusMsg.innerText = '🔴 듣고 있습니다 • 다시 말씀하시면 바로 들어요!';
-    updateVisuals();
-
-    if (state.sessionActive) {
-      setTimeout(startListeningSafe, 400);
-    }
+  } catch (e) {
+    // Non-critical background task
   }
 }
 
-// 🌟 Start Session: 1-Tap Handshake to Infinite Natural Voice Conversation
+// ==============================================================================
+// 🌐 Gemini 3.8 Live WebSocket Session Management
+// ==============================================================================
+function buildLiveSystemInstruction() {
+  const stealthLines = state.stealthTargets.length > 0
+    ? `\n[STEALTH REVIEW TARGETS — WEAVE IN NATURALLY]\nThe user previously learned or struggled with these expressions:\n${state.stealthTargets.map((t, i) => `${i + 1}. "${t.corrected}" (past mistake: "${t.original}")`).join('\n')}\nNEVER mention "from last time" or "remember this". Just naturally create situations where they might use them.\n`
+    : '';
+
+  const recentRecap = state.messages.length > 0
+    ? `\n[RECENT CONVERSATION CONTEXT BEFORE RECONNECT]\n${state.messages.slice(-6).map(m => `${m.role === 'user' ? 'User' : state.voice}: ${m.text}`).join('\n')}\nContinue seamlessly without re-introducing yourself.\n`
+    : '';
+
+  return `You are ${state.voice}, a warm, witty, genuine 30s American English-speaking close friend chatting over coffee.
+
+CRITICAL RULES:
+1. 100% PURE NATIVE AMERICAN ENGLISH ONLY:
+   - NEVER speak Korean or pronounce any Korean words under any circumstance.
+   - Speak naturally with authentic American rhythm, contractions, and connected speech (gonna, wanna, kinda, didn't, what's up).
+2. REAL PING-PONG CONVERSATION (FAST, SHORT TURNS):
+   - Keep EVERY turn crisp and lively: 1 to 3 short sentences max.
+   - Never give long monologues or textbook lectures. Always keep the chat bouncing back and forth.
+3. CONNECTED SPEECH (연음) LISTENING:
+   - The user wants to speak fast, casual, connected English like a native speaker.
+   - Understand their connected speech, linking, and reductions naturally from context without being nitpicky.
+4. NATURAL FRIENDLY COACHING & PRACTICE (EXACT STYLE):
+   - When the user says something noticeably unnatural, awkward, or Konglish (e.g. "I eat medicine", "yesterday I sleep early"):
+     * React like a friend and check naturally in English: "Wait — did you mean '[what they meant]'? Native speakers usually say '[Natural Native Expression]'. Wanna try saying it once?"
+     * Let them try saying it (1–2 natural reps, NEVER force 10 robotic reps unless they ask).
+     * Once they repeat it, cheer them on briefly ("Nice, that sounded super natural!") and bounce right back into the chat!
+   - Do NOT correct every single turn. If their English is already natural enough, just keep chatting like real friends!
+5. UNKNOWN WORDS:
+   - If the user asks what a word means ("What does X mean?"), explain it simply in easy English (A2-B1), give 1–2 short everyday example sentences, mention the vibe/nuance, and ask a fun follow-up question using it.
+6. TODAY'S TOPIC: ${state.currentTopic}
+${stealthLines}${recentRecap}`;
+}
+
+function connectLiveWebSocket(isReconnect = false) {
+  return new Promise((resolve, reject) => {
+    if (!state.apiKey) {
+      reject(new Error('Gemini API 키가 없습니다. 우측 상단 ⚙️ 설정에서 API 키를 입력해 주세요.'));
+      return;
+    }
+
+    const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${encodeURIComponent(state.apiKey)}`;
+    ws = new WebSocket(wsUrl);
+
+    let setupDone = false;
+    const setupTimeout = setTimeout(() => {
+      if (!setupDone) {
+        try { ws.close(); } catch (e) {}
+        reject(new Error('Gemini Live 서버 연결 시간 초과'));
+      }
+    }, 10000);
+
+    ws.onopen = () => {
+      const setupPayload = {
+        setup: {
+          model: state.liveModel,
+          generationConfig: {
+            responseModalities: ['AUDIO'],
+            speechConfig: {
+              voiceConfig: {
+                prebuiltVoiceConfig: {
+                  voiceName: state.voice
+                }
+              }
+            }
+          },
+          systemInstruction: {
+            parts: [{ text: buildLiveSystemInstruction() }]
+          },
+          inputAudioTranscription: {},
+          outputAudioTranscription: {},
+          realtimeInputConfig: {
+            automaticActivityDetection: {
+              disabled: false,
+              startOfSpeechSensitivity: state.bargeInSensitivity,
+              endOfSpeechSensitivity: 'END_SENSITIVITY_HIGH',
+              prefixPaddingMs: 220,
+              silenceDurationMs: state.silenceDurationMs
+            },
+            activityHandling: 'START_OF_ACTIVITY_INTERRUPTS'
+          }
+        }
+      };
+      ws.send(JSON.stringify(setupPayload));
+    };
+
+    ws.onmessage = async (event) => {
+      let raw = event.data;
+      if (raw instanceof Blob) {
+        raw = await raw.text();
+      }
+      let msg;
+      try {
+        msg = JSON.parse(raw);
+      } catch (e) {
+        return;
+      }
+
+      if (msg.setupComplete) {
+        setupDone = true;
+        clearTimeout(setupTimeout);
+        state.isConnecting = false;
+        state.isConnected = true;
+        state.reconnectAttempts = 0;
+        updateVisuals();
+
+        // Kick off conversation proactively on fresh start!
+        if (!isReconnect) {
+          ws.send(JSON.stringify({
+            clientContent: {
+              turns: [{
+                role: 'user',
+                parts: [{
+                  text: `[Session started] Kick off our chat right now with a super natural, short, fun 2-sentence friend opener about "${state.currentTopic}". Do NOT say "How was your day?" — jump right into a relatable mini-story or fun question!`
+                }]
+              }],
+              turnComplete: true
+            }
+          }));
+        }
+        resolve();
+        return;
+      }
+
+      if (msg.serverContent) {
+        const sc = msg.serverContent;
+
+        // 1. Instant Full-Duplex Barge-in!
+        if (sc.interrupted) {
+          stopAllAiAudio();
+          finalizeAiBubble(true);
+          updateVisuals();
+        }
+
+        // 2. Real-Time User Speech Transcription (Clean, Zero Duplication!)
+        if (sc.inputTranscription && sc.inputTranscription.text) {
+          appendUserTranscript(sc.inputTranscription.text);
+        }
+
+        // 3. Real-Time AI Speech Transcription
+        if (sc.outputTranscription && sc.outputTranscription.text) {
+          appendAiTranscript(sc.outputTranscription.text);
+        }
+
+        // 4. Real-Time 24kHz Native Puck/Aoede Audio Chunks
+        if (sc.modelTurn && sc.modelTurn.parts) {
+          for (const part of sc.modelTurn.parts) {
+            if (part.inlineData && part.inlineData.data) {
+              enqueuePcm24kAudio(part.inlineData.data);
+            }
+          }
+        }
+
+        // 5. Turn Complete -> Finalize AI bubble & quietly check for native tips in background
+        if (sc.turnComplete) {
+          const userSnap = lastFinalizedUserText;
+          const aiDone = finalizeAiBubble(false);
+          if (aiDone && userSnap) {
+            lastFinalizedUserText = '';
+            analyzeTurnInBackground(userSnap, aiDone.text, aiDone.row);
+          }
+          updateVisuals();
+        }
+      }
+    };
+
+    ws.onerror = (err) => {
+      console.error('[Live WS Error]', err);
+      if (!setupDone) {
+        clearTimeout(setupTimeout);
+        reject(new Error('Gemini Live WebSocket 연결 오류'));
+      }
+    };
+
+    ws.onclose = (ev) => {
+      clearTimeout(setupTimeout);
+      state.isConnected = false;
+      state.isConnecting = false;
+      stopAllAiAudio();
+      finalizeAiBubble(false);
+      finalizeUserBubble();
+
+      if (!setupDone) {
+        reject(new Error(ev.reason || `연결 종료 (code ${ev.code})`));
+        return;
+      }
+
+      // Seamless auto-reconnect if dropped unexpectedly during an active session
+      if (state.sessionActive && state.reconnectAttempts < 3) {
+        state.reconnectAttempts++;
+        statusMsg.textContent = `🔄 연결이 잠시 끊겨 재연결 중... (${state.reconnectAttempts}/3)`;
+        updateVisuals();
+        setTimeout(() => {
+          if (state.sessionActive) {
+            connectLiveWebSocket(true).catch(() => {
+              endSession(false);
+              addSystemPill('⚠️ 네트워크 연결이 종료되었습니다. 마이크를 눌러 다시 시작해 주세요.');
+            });
+          }
+        }, 900);
+      } else if (state.sessionActive) {
+        endSession(false);
+      }
+    };
+  });
+}
+
+// ==============================================================================
+// 🚀 Start / Stop / Mute / Text Send Actions
+// ==============================================================================
 async function startSession() {
-  unlockAudio();
+  if (state.sessionActive || state.isConnecting) return;
+
+  // 1. Synchronously unlock AudioContexts inside the tap gesture!
+  try {
+    initAudioContextsSync();
+  } catch (e) {
+    alert(e.message);
+    return;
+  }
   requestWakeLock();
 
   state.sessionActive = true;
-  welcomeTrigger.classList.add('hidden');
-  aiSpeechBlock.classList.remove('hidden');
-  liveWaveWrap.classList.remove('hidden');
+  state.isConnecting = true;
+  state.isMuted = false;
+  state.messages = [];
+  state.corrections = [];
+  lastFinalizedUserText = '';
 
-  aiSpeechText.innerText = '원어민 친구가 먼저 썰을 풀며 대화를 시작합니다...';
-  statusMsg.innerText = '대화 시작 중...';
-  state.isProcessing = true;
+  welcomeHero.classList.add('hidden');
+  muteBtn.classList.remove('hidden');
+  endCallBtn.classList.remove('hidden');
+  chatMessages.innerHTML = '';
+
   updateVisuals();
+  statusMsg.textContent = `⚡ ${state.voice} 원어민 라이브 연결 중...`;
 
-  let chosenTopic = TOPICS[0];
   try {
-    const initRes = await fetch('/api/session-init');
-    const initData = await initRes.json();
+    // 2. Request Mic + Load Topic & Stealth Targets in parallel!
+    const [initData] = await Promise.all([
+      fetch('/api/session-init').then(r => r.json()).catch(() => ({})),
+      startMicCapture()
+    ]);
+
     const recentTopics = initData.recentTopics || [];
-    
-    // Load local master notes to guarantee stealth targets persist even if server is reset!
+    state.skillPrompt = initData.skillPrompt || '';
+
     let localNotes = [];
     try {
       localNotes = JSON.parse(localStorage.getItem('master_review_notes') || '[]');
-    } catch(e) {}
+    } catch (e) {}
     const localPending = localNotes.filter(n => n.status !== 'mastered');
     state.stealthTargets = localPending.length > 0 ? localPending.slice(0, 5) : (initData.pendingTargets || []);
 
     const availableTopics = TOPICS.filter(t => !recentTopics.some(rt => t.includes(rt) || rt.includes(t)));
-    chosenTopic = availableTopics.length > 0 
+    state.currentTopic = availableTopics.length > 0
       ? availableTopics[Math.floor(Math.random() * availableTopics.length)]
       : TOPICS[Math.floor(Math.random() * TOPICS.length)];
-  } catch (e) {
-    console.warn('Session init failed:', e);
-  }
 
-  state.currentTopic = chosenTopic;
-  topicText.innerText = chosenTopic;
+    topicText.textContent = state.currentTopic;
+    addSystemPill(`🎙️ ${state.voice} 연결됨 • 주제: ${state.currentTopic.split('(')[0].trim()}`);
 
-  const starterPrompt = `[CRITICAL SESSION START]
-Topic: "${chosenTopic}"
-Stealth Review Targets from Cumulative Master: ${state.stealthTargets.map(t => `"${t.corrected}"`).join(', ') || 'None'}
+    // 3. Connect Gemini 3.8 Live WebSocket!
+    await connectLiveWebSocket(false);
+    startVisualizerLoop();
+    updateVisuals();
 
-INSTRUCTIONS:
-1. Kick off the conversation with a proactive opener like "Hey, did you hear about...", "Guess what happened to me earlier...", or "Random question, but have you noticed...".
-2. DO NOT ask generic "How was your day?" or "What did you do today?".
-3. Keep it pre-intermediate, friendly 30s peer, spoken-friendly, and engaging.`;
+  } catch (err) {
+    console.error('[StartSession Error]', err);
+    stopMicCapture();
+    releaseWakeLock();
+    state.sessionActive = false;
+    state.isConnecting = false;
+    state.isConnected = false;
+    muteBtn.classList.add('hidden');
+    endCallBtn.classList.add('hidden');
+    updateVisuals();
 
-  state.messages.push({ role: 'user', text: starterPrompt });
-
-  try {
-    const res = await fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        messages: state.messages,
-        model: state.currentModel,
-        voice: state.currentVoice,
-        apiKey: state.apiKey,
-        stealthTargets: state.stealthTargets,
-        currentTopic: state.currentTopic,
-        skipAudio: state.voiceMode === 'instant'
-      })
-    });
-
-    const data = await res.json();
-    if (!res.ok) {
-      throw new Error(data.error || 'Failed to start session');
-    }
-
-    const spokenText = (data.cleanSpokenText && data.cleanSpokenText.trim()) 
-      || (data.rawText && data.rawText.trim()) 
-      || "Hey! Great to catch up with you!";
-
-    state.messages = [{ role: 'model', text: spokenText }];
-    aiSpeechText.innerText = spokenText;
-
-    // Play Voice with 100% guarantee!
-    await playAiSpeech(spokenText, data.audioDataUrl);
-
-  } catch (e) {
-    console.error(e);
-    state.isProcessing = false;
-    const fallbackText = "Hey! Did you hear about that crazy AI tool everyone has been testing lately?";
-    aiSpeechText.innerText = fallbackText;
-    await playAiSpeech(fallbackText, null);
+    const msg = (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError')
+      ? '⚠️ 마이크 권한이 거부되었습니다. 브라우저 주소창 옆 권한 설정에서 마이크를 허용해 주세요.'
+      : `⚠️ 연결 실패: ${err.message}`;
+    statusMsg.textContent = msg;
+    addSystemPill(msg);
   }
 }
 
-// ☁️ Google Drive Full Auto-Sync Engine
-async function syncToGoogleDrive(fullTranscript = '') {
-  if (!state.gdriveWebhookUrl) return;
+async function endSession(autoSave = true) {
+  state.sessionActive = false;
+  state.isConnecting = false;
+  state.isConnected = false;
+  state.isMuted = false;
 
+  stopAllAiAudio();
+  stopMicCapture();
+  releaseWakeLock();
+
+  if (ws) {
+    try { ws.close(1000, 'User ended call'); } catch (e) {}
+    ws = null;
+  }
+
+  finalizeUserBubble();
+  finalizeAiBubble(false);
+
+  muteBtn.classList.add('hidden');
+  endCallBtn.classList.add('hidden');
+  updateVisuals();
+
+  if (autoSave && state.messages.length > 0) {
+    addSystemPill('📞 통화 종료 • 대화 기록을 자동 저장하고 있습니다...');
+    await saveSessionLog(true);
+  } else {
+    statusMsg.textContent = '통화가 종료되었습니다. 마이크를 눌러 언제든 다시 시작하세요.';
+  }
+}
+
+function toggleMute() {
+  if (!state.sessionActive) return;
+  state.isMuted = !state.isMuted;
+  updateVisuals();
+}
+
+function sendTextMessage(text) {
+  const clean = text.trim();
+  if (!clean) return;
+
+  if (!state.sessionActive) {
+    // Start session first if user sends text before tapping start
+    startSession().then(() => {
+      setTimeout(() => sendTextMessage(clean), 1200);
+    });
+    return;
+  }
+
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+  stopAllAiAudio();
+  finalizeAiBubble(false);
+
+  const b = ensureUserBubble();
+  b.text = clean;
+  b.bubble.textContent = clean;
+  finalizeUserBubble();
+
+  ws.send(JSON.stringify({
+    clientContent: {
+      turns: [{ role: 'user', parts: [{ text: clean }] }],
+      turnComplete: true
+    }
+  }));
+  scrollChatToBottom(true);
+}
+
+function updateVisuals() {
+  statusDot.className = 'status-indicator';
+  callOrbBtn.className = 'live-orb-btn';
+  voiceBars.className = 'voice-bars';
+  voiceBadge.textContent = `LIVE • ${state.voice}`;
+
+  const modelLabel = state.liveModel.includes('3.8')
+    ? 'Gemini 3.8 Live'
+    : state.liveModel.includes('3.1')
+      ? 'Gemini 3.1 Live'
+      : 'Gemini 2.5 Live';
+  if (liveChip) liveChip.textContent = modelLabel;
+
+  if (muteBtn) {
+    muteBtn.classList.toggle('active-mute', state.isMuted);
+    if (muteIconOn) muteIconOn.classList.toggle('hidden', state.isMuted);
+    if (muteIconOff) muteIconOff.classList.toggle('hidden', !state.isMuted);
+  }
+
+  if (state.isConnecting) {
+    statusDot.classList.add('connecting');
+    callOrbBtn.classList.add('connecting');
+    statusMsg.textContent = `⚡ ${state.voice} 연결 중...`;
+  } else if (!state.sessionActive) {
+    statusMsg.textContent = '마이크 버튼을 눌러 원어민 친구와 대화를 시작하세요';
+  } else if (state.isMuted) {
+    statusDot.classList.add('muted');
+    callOrbBtn.classList.add('muted');
+    statusMsg.textContent = '🔇 마이크가 음소거되었습니다';
+  } else if (state.isAiSpeaking) {
+    statusDot.classList.add('speaking');
+    callOrbBtn.classList.add('speaking');
+    voiceBars.classList.add('speaking');
+    statusMsg.textContent = `🔊 ${state.voice} 말하는 중 • 말 걸면 바로 끼어들 수 있어요`;
+  } else if (state.isConnected) {
+    statusDot.classList.add('listening');
+    callOrbBtn.classList.add('listening');
+    voiceBars.classList.add('listening');
+    statusMsg.textContent = '🟢 듣고 있어요 • 편하게 연음으로 말씀하세요!';
+  }
+}
+
+// ==============================================================================
+// 💾 Master Review Notes & Google Drive Auto-Sync
+// ==============================================================================
+function accumulateMasterNote(corr) {
+  if (!corr || !corr.corrected) return;
+  let notes = [];
+  try {
+    notes = JSON.parse(localStorage.getItem('master_review_notes') || '[]');
+  } catch (e) {}
+
+  const exists = notes.some(n => n.corrected.toLowerCase() === corr.corrected.toLowerCase());
+  if (!exists) {
+    const today = new Date().toISOString().split('T')[0];
+    notes.unshift({
+      dateAdded: today,
+      original: corr.original || '',
+      corrected: corr.corrected,
+      explanation: corr.explanation || '',
+      status: 'pending'
+    });
+    localStorage.setItem('master_review_notes', JSON.stringify(notes));
+
+    fetch('/api/save-log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        topic: state.currentTopic,
+        corrections: [corr],
+        voice: state.voice
+      })
+    }).catch(() => {});
+  }
+}
+
+async function syncToGoogleDrive(fullTranscript = '') {
+  if (!state.gdriveWebhookUrl) return null;
   const transcript = fullTranscript || state.messages
-    .map(m => `${m.role === 'user' ? 'Me' : 'English Friend'}: ${m.text}`)
+    .map(m => `${m.role === 'user' ? 'Me' : state.voice}: ${m.text}`)
     .join('\n\n');
 
   try {
@@ -850,26 +1136,23 @@ async function syncToGoogleDrive(fullTranscript = '') {
         webhookUrl: state.gdriveWebhookUrl
       })
     });
-    const result = await res.json();
-    console.log('[Google Drive Sync Response]', result);
-    return result;
+    return await res.json();
   } catch (err) {
-    console.warn('[Google Drive Sync Warning]', err.message);
+    console.warn('[GDrive Sync Warning]', err.message);
+    return null;
   }
 }
 
-// 💾 Save Full Session Log & Master Cumulative Review Storage
-async function saveSessionLog() {
+async function saveSessionLog(silent = false) {
   if (state.messages.length === 0) {
-    alert('아직 나눈 대화가 없습니다.');
+    if (!silent) alert('아직 나눈 대화가 없습니다.');
     return;
   }
 
   const fullTranscript = state.messages
-    .map(m => `${m.role === 'user' ? 'Me' : 'English Friend'}: ${m.text}`)
+    .map(m => `${m.role === 'user' ? 'Me' : state.voice}: ${m.text}`)
     .join('\n\n');
 
-  // Trigger Google Drive auto-sync
   if (state.gdriveWebhookUrl) {
     syncToGoogleDrive(fullTranscript);
   }
@@ -881,230 +1164,21 @@ async function saveSessionLog() {
       body: JSON.stringify({
         topic: state.currentTopic,
         corrections: state.corrections,
-        fullTranscript
+        fullTranscript,
+        voice: state.voice
       })
     });
-
     const data = await res.json();
     if (data.success) {
-      const gdriveNotice = state.gdriveWebhookUrl ? '\n• 구글 드라이브: [영어 회화] 폴더로 자동 동기화됨 ☁️' : '';
-      alert(`🎉 대화 일지가 저장되었습니다!\n\n• 세션 파일: ${data.sessionFilename}\n• 누적 마스터 표현 총 ${data.masterCount}개${gdriveNotice}`);
-    } else {
-      alert('저장 실패: ' + data.error);
+      if (silent) {
+        addSystemPill(`✅ 저장 완료! (누적 표현 ${data.masterCount}개${state.gdriveWebhookUrl ? ' • 구글 드라이브 동기화됨' : ''})`);
+      } else {
+        const gd = state.gdriveWebhookUrl ? '\n• 구글 드라이브 [영어 회화] 폴더 자동 동기화 ☁️' : '';
+        alert(`🎉 대화 일지가 저장되었습니다!\n• 세션: ${data.sessionFilename}\n• 누적 표현: 총 ${data.masterCount}개${gd}`);
+      }
     }
   } catch (err) {
-    alert('저장 오류: ' + err.message);
-  }
-}
-
-// ⚙️ Config & Settings
-async function loadConfig() {
-  try {
-    const res = await fetch('/api/config');
-    const data = await res.json();
-    state.currentModel = data.currentModel;
-    state.currentVoice = data.currentVoice || 'Puck';
-    voiceBadge.innerText = state.voiceMode === 'instant' ? '⚡ 초고속 모드' : `Gemini Live • ${state.currentVoice}`;
-    modelSelect.value = data.currentModel;
-    if (voiceSelect) voiceSelect.value = state.currentVoice;
-    if (voiceModeSelect) voiceModeSelect.value = state.voiceMode;
-    if (silenceSelect) silenceSelect.value = state.silenceThresholdMs.toString();
-
-    if (data.localIps && data.localIps.length > 0) {
-      mobileUrls.innerHTML = data.localIps.map(ip => `
-        <div class="ip-row">
-          <span>http://${ip}:${data.port || 3000}</span>
-        </div>
-      `).join('');
-    }
-  } catch (e) {
-    console.warn('Failed to load server config:', e);
-  }
-}
-
-function toggleVoiceMode() {
-  state.voiceMode = state.voiceMode === 'instant' ? 'gemini' : 'instant';
-  localStorage.setItem('english_voice_mode', state.voiceMode);
-  voiceBadge.innerText = state.voiceMode === 'instant' ? '⚡ 초고속 모드' : `Gemini Live • ${state.currentVoice}`;
-  if (voiceModeSelect) voiceModeSelect.value = state.voiceMode;
-  updateVisuals();
-  const modeName = state.voiceMode === 'instant' ? '⚡ 초고속 모드 (0초 딜레이, 100% 무음 방지)' : '🎙️ Gemini Live 클라우드 AI 음성 모드';
-  statusMsg.innerText = `${modeName}로 전환되었습니다.`;
-}
-
-// ==============================================================================
-// 🎯 Event Listeners & Bootstrapping
-// ==============================================================================
-welcomeTrigger.addEventListener('click', startSession);
-directStartBtn.addEventListener('click', (e) => {
-  e.stopPropagation();
-  startSession();
-});
-
-if (voiceModeToggle) {
-  voiceModeToggle.addEventListener('click', toggleVoiceMode);
-}
-
-// Center Mic Button: Smart Action
-micBtn.addEventListener('click', () => {
-  unlockAudio();
-  requestWakeLock();
-
-  if (!state.sessionActive) {
-    startSession();
-  } else if (state.isSpeaking) {
-    // Barge-in: Interrupt AI immediately!
-    stopAudioPlayback();
-    startListeningSafe();
-  } else if (state.isListening && (currentRecordedText.trim() || accumulatedTranscript.trim())) {
-    // User finished talking: Instant submit right now!
-    submitSpeech();
-  } else if (!state.isListening && !state.isProcessing) {
-    startListeningSafe();
-  }
-});
-
-sendBtn.addEventListener('click', () => {
-  const val = textInput.value;
-  if (val.trim()) {
-    handleUserInput(val.trim());
-    textInput.value = '';
-  }
-});
-
-textInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
-    const val = textInput.value;
-    if (val.trim()) {
-      handleUserInput(val.trim());
-      textInput.value = '';
-    }
-  }
-});
-
-saveLogBtn.addEventListener('click', saveSessionLog);
-
-// Settings Modal
-settingsBtn.addEventListener('click', () => {
-  loadConfig();
-  if (apiKeyInput) apiKeyInput.value = state.apiKey;
-  if (voiceModeSelect) voiceModeSelect.value = state.voiceMode;
-  if (silenceSelect) silenceSelect.value = state.silenceThresholdMs.toString();
-  if (gdriveWebhookInput) gdriveWebhookInput.value = state.gdriveWebhookUrl;
-  if (state.gdriveWebhookUrl && gdriveStatusText) {
-    gdriveStatusText.innerHTML = '✅ <span style="color:#4ade80;">구글 드라이브 [영어 회화] 폴더로 자동 연동 중</span>';
-  }
-  settingsModal.classList.remove('hidden');
-});
-
-closeSettingsBtn.addEventListener('click', () => {
-  settingsModal.classList.add('hidden');
-});
-
-saveSettingsBtn.addEventListener('click', async () => {
-  const selectedModel = modelSelect.value;
-  const selectedVoice = voiceSelect.value;
-  const selectedVoiceMode = voiceModeSelect ? voiceModeSelect.value : state.voiceMode;
-  const selectedSilence = silenceSelect ? parseInt(silenceSelect.value, 10) : state.silenceThresholdMs;
-  const enteredKey = apiKeyInput ? apiKeyInput.value.trim() : '';
-  const enteredGdrive = gdriveWebhookInput ? gdriveWebhookInput.value.trim() : '';
-
-  if (enteredKey) {
-    state.apiKey = enteredKey;
-    localStorage.setItem('gemini_api_key', enteredKey);
-  }
-
-  state.voiceMode = selectedVoiceMode;
-  localStorage.setItem('english_voice_mode', selectedVoiceMode);
-
-  state.silenceThresholdMs = selectedSilence;
-  localStorage.setItem('silence_wait_ms', selectedSilence.toString());
-
-  state.gdriveWebhookUrl = enteredGdrive;
-  localStorage.setItem('gdrive_webhook_url', enteredGdrive);
-
-  await fetch('/api/config', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: selectedModel, voice: selectedVoice, apiKey: state.apiKey })
-  });
-
-  state.currentModel = selectedModel;
-  state.currentVoice = selectedVoice;
-  voiceBadge.innerText = state.voiceMode === 'instant' ? '⚡ 초고속 모드' : `Gemini Live • ${selectedVoice}`;
-  aiRoleLabel.innerText = state.voiceMode === 'instant' ? 'English Friend' : `Gemini Live (${selectedVoice})`;
-  settingsModal.classList.add('hidden');
-  updateVisuals();
-  alert('설정이 저장되었습니다!');
-});
-
-// Google Drive Webhook Connection Test
-if (testGdriveBtn) {
-  testGdriveBtn.addEventListener('click', async () => {
-    const url = gdriveWebhookInput ? gdriveWebhookInput.value.trim() : '';
-    if (!url) {
-      alert('구글 앱스 스크립트 웹앱 URL을 입력해 주세요.');
-      return;
-    }
-    testGdriveBtn.innerText = '연결 중...';
-    try {
-      const res = await fetch('/api/sync-gdrive', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          topic: 'Google Drive Connection Test',
-          corrections: [{ original: 'Test awkward sentence', corrected: 'Natural native sentence', explanation: '구글 드라이브 연동 성공' }],
-          fullTranscript: 'Me: Testing connection to Google Drive.\nEnglish Friend: Your English Study folder is now 100% connected!',
-          webhookUrl: url
-        })
-      });
-      const data = await res.json();
-      if (data.success || data.message) {
-        state.gdriveWebhookUrl = url;
-        localStorage.setItem('gdrive_webhook_url', url);
-        if (gdriveStatusText) gdriveStatusText.innerHTML = '✅ <span style="color:#4ade80;">구글 드라이브 연동 성공! 내 드라이브 [영어 회화] 폴더에 테스트 문서가 생성되었습니다.</span>';
-        alert('🎉 구글 드라이브 [영어 회화] 폴더 연동 성공!\n내 구글 드라이브에 테스트 문서가 정상 생성되었습니다.');
-      } else {
-        alert('연동 실패: ' + (data.error || '웹앱 URL과 권한을 확인해 주세요.'));
-      }
-    } catch(err) {
-      alert('연동 오류: ' + err.message);
-    } finally {
-      testGdriveBtn.innerText = '연결 테스트';
-    }
-  });
-}
-
-// 📚 Cumulative Master Review Storage Engine
-function accumulateMasterNote(corr) {
-  if (!corr || !corr.corrected) return;
-
-  let notes = [];
-  try {
-    notes = JSON.parse(localStorage.getItem('master_review_notes') || '[]');
-  } catch(e) {}
-
-  const exists = notes.some(n => n.corrected.toLowerCase() === corr.corrected.toLowerCase());
-  if (!exists) {
-    const today = new Date().toISOString().split('T')[0];
-    notes.unshift({
-      dateAdded: today,
-      original: corr.original || '',
-      corrected: corr.corrected,
-      explanation: corr.explanation || '',
-      status: 'pending' // Pending stealth elicitation for next sessions!
-    });
-    localStorage.setItem('master_review_notes', JSON.stringify(notes));
-
-    // Also sync to backend in background
-    fetch('/api/save-log', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        topic: state.currentTopic,
-        corrections: [corr]
-      })
-    }).catch(() => {});
+    if (!silent) alert('저장 오류: ' + err.message);
   }
 }
 
@@ -1112,89 +1186,245 @@ function renderMasterNotes() {
   let notes = [];
   try {
     notes = JSON.parse(localStorage.getItem('master_review_notes') || '[]');
-  } catch(e) {}
+  } catch (e) {}
 
-  if (!notes || notes.length === 0) {
-    notesListContainer.innerHTML = `<p style="color: #6b7280; font-size: 13px; text-align: center; padding: 25px;">아직 누적된 교정 표현이 없습니다.<br>대화 중 교정받은 표현이 여기에 자동 누적됩니다.</p>`;
+  if (!notes.length) {
+    notesListContainer.innerHTML = `<p class="empty-notes">아직 누적된 교정 표현이 없습니다.<br>대화 중 친구가 알려준 원어민 표현이 자동 저장됩니다.</p>`;
     return;
   }
 
-  let tableHtml = `
+  let html = `
     <table class="master-table">
       <thead>
         <tr>
-          <th>등록일</th>
-          <th>원래 한 말 (오류) ➔ 추천 표현</th>
+          <th>날짜</th>
+          <th>원래 한 말 ➔ 원어민 표현</th>
           <th>뉘앙스 설명</th>
           <th>상태</th>
         </tr>
       </thead>
       <tbody>
   `;
-
   notes.forEach(item => {
-    const isMastered = item.status === 'mastered';
-    const statusBadge = isMastered 
-      ? `<span class="status-tag mastered">✅ 마스터</span>` 
-      : `<span class="status-tag pending">🎯 스텔스 유도</span>`;
-
-    tableHtml += `
+    const badge = item.status === 'mastered'
+      ? `<span class="status-tag mastered">✅ 마스터</span>`
+      : `<span class="status-tag pending">🎯 복습</span>`;
+    html += `
       <tr>
-        <td style="color: #9ca3af; font-size: 11px;">${item.dateAdded || '-'}</td>
+        <td style="color:#9ca3af;font-size:11px;white-space:nowrap;">${escapeHtml(item.dateAdded || '-')}</td>
         <td>
-          <div class="orig-text">${escapeHtml(item.original || '-')}</div>
-          <div class="target-text">🎯 ${escapeHtml(item.corrected)}</div>
+          ${item.original ? `<div class="orig-text">${escapeHtml(item.original)}</div>` : ''}
+          <div class="target-text">${escapeHtml(item.corrected)}</div>
         </td>
         <td class="expl-text">${escapeHtml(item.explanation || '-')}</td>
-        <td>${statusBadge}</td>
+        <td>${badge}</td>
       </tr>
     `;
   });
-
-  tableHtml += `</tbody></table>`;
-  notesListContainer.innerHTML = tableHtml;
+  html += `</tbody></table>`;
+  notesListContainer.innerHTML = html;
 }
 
-if (notesBtn) {
-  notesBtn.addEventListener('click', () => {
-    renderMasterNotes();
-    notesModal.classList.remove('hidden');
-  });
-}
-
-if (closeNotesBtn) {
-  closeNotesBtn.addEventListener('click', () => notesModal.classList.add('hidden'));
-}
-if (closeNotesBtn2) {
-  closeNotesBtn2.addEventListener('click', () => notesModal.classList.add('hidden'));
-}
-
-if (copyNotesBtn) {
-  copyNotesBtn.addEventListener('click', () => {
-    let notes = [];
-    try {
-      notes = JSON.parse(localStorage.getItem('master_review_notes') || '[]');
-    } catch(e) {}
-
-    if (notes.length === 0) {
-      alert('복사할 표현이 없습니다.');
-      return;
+// ==============================================================================
+// ⚙️ Config Loading & Event Wiring
+// ==============================================================================
+async function loadConfig() {
+  try {
+    const res = await fetch('/api/config');
+    const data = await res.json();
+    if (!localStorage.getItem('live_model') && data.currentLiveModel) {
+      state.liveModel = data.currentLiveModel;
+    }
+    if (!localStorage.getItem('live_voice') && data.currentVoice) {
+      state.voice = data.currentVoice;
     }
 
-    let md = `# 📚 누적 복습 마스터 표현 노트\n\n`;
-    notes.forEach((n, i) => {
-      md += `${i + 1}. [원래 한 말]: ${n.original || '-'} ➔ [원어민 표현]: ${n.corrected}\n   설명: ${n.explanation || '-'}\n\n`;
-    });
+    if (voiceSelect) voiceSelect.value = state.voice;
+    if (liveModelSelect) liveModelSelect.value = state.liveModel;
+    if (silenceSelect) silenceSelect.value = String(state.silenceDurationMs);
+    if (bargeInSelect) bargeInSelect.value = state.bargeInSensitivity;
 
-    navigator.clipboard.writeText(md).then(() => {
-      alert('📋 마스터 표현 노트가 클립보드에 복사되었습니다! 메모장이나 구글 드라이브/닥스에 붙여넣으실 수 있습니다.');
-    }).catch(() => {
-      alert('복사 권한 오류');
-    });
+    if (data.localIps && data.localIps.length > 0 && mobileUrls) {
+      mobileUrls.innerHTML = data.localIps
+        .map(ip => `<div>http://${ip}:${data.port || 3000}</div>`)
+        .join('');
+    }
+    updateVisuals();
+  } catch (e) {
+    console.warn('Config load warning:', e);
+  }
+}
+
+// Direct Start Button
+directStartBtn.addEventListener('click', startSession);
+
+// Center Live Orb Button: Start call OR instant manual barge-in interrupt
+callOrbBtn.addEventListener('click', () => {
+  if (!state.sessionActive) {
+    startSession();
+  } else if (state.isAiSpeaking) {
+    // Instant manual interrupt in addition to automatic voice barge-in
+    stopAllAiAudio();
+    finalizeAiBubble(true);
+    statusMsg.textContent = '🟢 바로 말씀하세요!';
+  } else if (state.isMuted) {
+    toggleMute();
+  }
+});
+
+muteBtn.addEventListener('click', toggleMute);
+endCallBtn.addEventListener('click', () => endSession(true));
+
+sendBtn.addEventListener('click', () => {
+  const val = textInput.value;
+  if (val.trim()) {
+    textInput.value = '';
+    sendTextMessage(val);
+  }
+});
+
+textInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.isComposing) {
+    const val = textInput.value;
+    if (val.trim()) {
+      textInput.value = '';
+      sendTextMessage(val);
+    }
+  }
+});
+
+saveLogBtn.addEventListener('click', () => saveSessionLog(false));
+
+// Settings Modal
+settingsBtn.addEventListener('click', () => {
+  loadConfig();
+  if (apiKeyInput) apiKeyInput.value = state.apiKey;
+  if (voiceSelect) voiceSelect.value = state.voice;
+  if (liveModelSelect) liveModelSelect.value = state.liveModel;
+  if (silenceSelect) silenceSelect.value = String(state.silenceDurationMs);
+  if (bargeInSelect) bargeInSelect.value = state.bargeInSensitivity;
+  if (gdriveWebhookInput) gdriveWebhookInput.value = state.gdriveWebhookUrl;
+  if (state.gdriveWebhookUrl && gdriveStatusText) {
+    gdriveStatusText.innerHTML = '✅ <span style="color:#4ade80;">구글 드라이브 [영어 회화] 폴더 자동 연동 중</span>';
+  }
+  settingsModal.classList.remove('hidden');
+});
+
+closeSettingsBtn.addEventListener('click', () => settingsModal.classList.add('hidden'));
+
+saveSettingsBtn.addEventListener('click', async () => {
+  const newVoice = voiceSelect.value;
+  const newModel = liveModelSelect.value;
+  const newSilence = parseInt(silenceSelect.value, 10);
+  const newBargeIn = bargeInSelect.value;
+  const newKey = apiKeyInput.value.trim();
+  const newGdrive = gdriveWebhookInput.value.trim();
+
+  const needsReconnect = state.sessionActive && (
+    newVoice !== state.voice ||
+    newModel !== state.liveModel ||
+    newSilence !== state.silenceDurationMs ||
+    newBargeIn !== state.bargeInSensitivity ||
+    (newKey && newKey !== state.apiKey)
+  );
+
+  if (newKey) {
+    state.apiKey = newKey;
+    localStorage.setItem('gemini_api_key', newKey);
+  }
+  state.voice = newVoice;
+  state.liveModel = newModel;
+  state.silenceDurationMs = newSilence;
+  state.bargeInSensitivity = newBargeIn;
+  state.gdriveWebhookUrl = newGdrive;
+
+  localStorage.setItem('live_voice', newVoice);
+  localStorage.setItem('live_model', newModel);
+  localStorage.setItem('live_silence_ms', String(newSilence));
+  localStorage.setItem('live_bargein', newBargeIn);
+  localStorage.setItem('gdrive_webhook_url', newGdrive);
+
+  fetch('/api/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ liveModel: newModel, voice: newVoice, apiKey: state.apiKey })
+  }).catch(() => {});
+
+  settingsModal.classList.add('hidden');
+  updateVisuals();
+
+  if (needsReconnect) {
+    addSystemPill(`🔄 설정 적용 중 (${newVoice})...`);
+    stopAllAiAudio();
+    if (ws) {
+      try { ws.close(1000, 'Applying new settings'); } catch (e) {}
+    }
+    state.reconnectAttempts = 0;
+    try {
+      await connectLiveWebSocket(true);
+      addSystemPill(`✅ ${newVoice} 목소리로 즉시 전환되었습니다!`);
+    } catch (e) {
+      addSystemPill(`⚠️ 재연결 실패: ${e.message}`);
+    }
+  }
+});
+
+// Google Drive Test
+if (testGdriveBtn) {
+  testGdriveBtn.addEventListener('click', async () => {
+    const url = gdriveWebhookInput.value.trim();
+    if (!url) return alert('구글 앱스 스크립트 웹앱 URL을 입력해 주세요.');
+    testGdriveBtn.textContent = '연결 중...';
+    try {
+      const res = await fetch('/api/sync-gdrive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          topic: 'Google Drive Connection Test',
+          corrections: [{ original: 'I eat medicine', corrected: 'I took some medicine', explanation: '구글 드라이브 연동 테스트' }],
+          fullTranscript: 'Me: Testing Drive sync.\nPuck: Connected and ready!',
+          webhookUrl: url
+        })
+      });
+      const data = await res.json();
+      if (data.success || data.message) {
+        state.gdriveWebhookUrl = url;
+        localStorage.setItem('gdrive_webhook_url', url);
+        gdriveStatusText.innerHTML = '✅ <span style="color:#4ade80;">구글 드라이브 연동 성공!</span>';
+        alert('🎉 구글 드라이브 [영어 회화] 폴더 연동 성공!');
+      } else {
+        alert('연동 실패: ' + (data.error || 'URL과 권한을 확인해 주세요.'));
+      }
+    } catch (err) {
+      alert('연동 오류: ' + err.message);
+    } finally {
+      testGdriveBtn.textContent = '연결 테스트';
+    }
   });
 }
 
-// Check Secure Context on Mobile
+// Notes Modal
+notesBtn.addEventListener('click', () => {
+  renderMasterNotes();
+  notesModal.classList.remove('hidden');
+});
+closeNotesBtn.addEventListener('click', () => notesModal.classList.add('hidden'));
+closeNotesBtn2.addEventListener('click', () => notesModal.classList.add('hidden'));
+
+copyNotesBtn.addEventListener('click', () => {
+  let notes = [];
+  try { notes = JSON.parse(localStorage.getItem('master_review_notes') || '[]'); } catch (e) {}
+  if (!notes.length) return alert('복사할 표현이 없습니다.');
+
+  let md = `# 📚 누적 복습 마스터 표현 노트\n\n`;
+  notes.forEach((n, i) => {
+    md += `${i + 1}. ${n.original || '-'} ➔ ${n.corrected}\n   💡 ${n.explanation || '-'}\n\n`;
+  });
+  navigator.clipboard.writeText(md)
+    .then(() => alert('📋 클립보드에 복사되었습니다!'))
+    .catch(() => alert('복사 권한 오류'));
+});
+
 function checkSecureContext() {
   const isLocal = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
   if (!window.isSecureContext && !isLocal && insecureBanner) {
@@ -1202,18 +1432,12 @@ function checkSecureContext() {
   }
 }
 
-// Initial Bootstrap
 window.addEventListener('DOMContentLoaded', () => {
-  setupSpeechRecognition();
   loadConfig();
   checkSecureContext();
   updateVisuals();
 
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js').catch(err => console.warn('SW register fail:', err));
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
   }
-
-  // Pre-unlock audio & request wake lock on any touch gesture
-  document.body.addEventListener('touchstart', unlockAudio, { once: true });
-  document.body.addEventListener('click', unlockAudio, { once: true });
 });
