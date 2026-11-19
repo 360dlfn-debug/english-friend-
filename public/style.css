@@ -214,6 +214,148 @@ html, body {
   flex-shrink: 0;
 }
 
+/* ==================== Session Resume Banner ==================== */
+.resume-banner {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.18) 0%, rgba(139, 92, 246, 0.14) 100%);
+  border-bottom: 1.5px solid rgba(59, 130, 246, 0.38);
+  padding: 8px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  animation: drillSlideDown 0.25s ease-out;
+  flex-shrink: 0;
+  z-index: 12;
+}
+
+.resume-banner.hidden {
+  display: none !important;
+}
+
+.resume-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.resume-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.resume-text-wrap {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.resume-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #93c5fd;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.resume-subtitle {
+  font-size: 10.5px;
+  color: #9ca3af;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.resume-btns {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.resume-btn {
+  border: none;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.resume-btn.primary {
+  background: var(--accent-blue);
+  color: #ffffff;
+}
+.resume-btn.primary:hover {
+  filter: brightness(1.1);
+}
+
+.resume-btn.ghost {
+  background: transparent;
+  color: #9ca3af;
+  font-size: 16px;
+  padding: 2px 6px;
+}
+.resume-btn.ghost:hover {
+  color: #ffffff;
+}
+
+/* ==================== AI Long-Term Memory Modal ==================== */
+.mem-card {
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 11px 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mem-card-head {
+  font-size: 12px;
+  font-weight: 700;
+  color: #a5b4fc;
+}
+
+.mem-tag-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mem-tag {
+  font-size: 11px;
+  background: rgba(99, 102, 241, 0.16);
+  border: 1px solid rgba(99, 102, 241, 0.32);
+  color: #c7d2fe;
+  padding: 3px 8px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.mem-list-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mem-list-item {
+  font-size: 12px;
+  color: #d1d5db;
+  line-height: 1.45;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.mem-list-item::before {
+  content: '•';
+  color: #818cf8;
+  font-weight: bold;
+}
+
 /* ==================== 10-Repetition Live Drill Banner ==================== */
 .drill-banner {
   background: linear-gradient(135deg, rgba(245, 158, 11, 0.14) 0%, rgba(239, 68, 68, 0.09) 100%);

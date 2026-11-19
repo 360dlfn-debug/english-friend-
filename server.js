@@ -26,6 +26,51 @@ try {
 
 const MASTER_JSON_PATH = path.join(STUDY_LOGS_DIR, 'MASTER_REVIEW_NOTES.json');
 const MASTER_MD_PATH = path.join(STUDY_LOGS_DIR, '누적_복습_표현노트.md');
+const USER_PROFILE_PATH = path.join(STUDY_LOGS_DIR, 'USER_PROFILE.json');
+
+const DEFAULT_USER_PROFILE = {
+  name: "My Friend",
+  interests: [
+    "강남 아파트/부동산 매수 및 집 구하기 (Real estate in Gangnam)",
+    "여행 및 홈투어 영상 시청 (Travel & home tour videos)",
+    "자동차 운전 및 출퇴근 (Driving & car commuting)",
+    "실전 생활 영어 및 자연스러운 일상 대화"
+  ],
+  personalFacts: [
+    "서울 강남 쪽에 집을 매수하거나 이사하는 것에 큰 관심을 두고 있음",
+    "주로 차 안에서 운전하거나 이동 중에 영어로 대화함",
+    "주변 이웃(neighbors)과 동네 분위기(neighborhood)에 관심이 많음"
+  ],
+  learningPreferences: [
+    "어색하거나 틀린 표현이 나오면 100% 즉시 짚어주고 10회 턴테이킹 반복 훈련(Count 1~10)으로 교정해주길 원함",
+    "교과서식 딱딱한 문법보다 30대 원어민 미국인 친구(Puck)와의 위트 있는 진짜 대화를 원함"
+  ],
+  recentMemories: [
+    "강남 집 매수 계획과 아파트 가격 상승에 대해 이야기 나눔 (2026-11-19)",
+    "여행 영상 시청 및 동네 분위기에 대한 표현을 연습함 (2026-11-19)"
+  ],
+  lastLearned: new Date().toISOString()
+};
+
+function loadUserProfile() {
+  if (fs.existsSync(USER_PROFILE_PATH)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(USER_PROFILE_PATH, 'utf-8'));
+      return { ...DEFAULT_USER_PROFILE, ...data };
+    } catch (e) {
+      console.warn('Failed to parse USER_PROFILE.json:', e.message);
+    }
+  }
+  return { ...DEFAULT_USER_PROFILE };
+}
+
+function saveUserProfile(profile) {
+  try {
+    fs.writeFileSync(USER_PROFILE_PATH, JSON.stringify(profile, null, 2), 'utf-8');
+  } catch (e) {
+    console.warn('saveUserProfile warning:', e.message);
+  }
+}
 
 function deduplicateWords(str) {
   if (!str || typeof str !== 'string') return '';
@@ -174,20 +219,122 @@ app.post('/api/config', (req, res) => {
   });
 });
 
-// Session Initializer (Topics + Stealth Review Targets + SKILL.md)
+// Session Initializer (Topics + Stealth Review Targets + SKILL.md + User Profile Memory)
 app.get('/api/session-init', (req, res) => {
   try {
     const recentTopics = getRecentTopics();
     const masterNotes = loadMasterNotes();
     const pendingTargets = masterNotes.filter(n => n.status !== 'mastered');
+    const userProfile = loadUserProfile();
 
     res.json({
       recentTopics,
       pendingTargets: pendingTargets.slice(0, 5),
-      skillPrompt: readSkillPrompt()
+      skillPrompt: readSkillPrompt(),
+      userProfile
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// User Profile & Long-Term Memory Endpoints
+app.get('/api/user-profile', (req, res) => {
+  res.json(loadUserProfile());
+});
+
+app.post('/api/user-profile', (req, res) => {
+  try {
+    const current = loadUserProfile();
+    const updated = {
+      ...current,
+      ...req.body,
+      lastLearned: new Date().toISOString()
+    };
+    saveUserProfile(updated);
+    res.json({ success: true, profile: updated });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Background Continuous Learner: Extracts new personal facts from conversations
+app.post('/api/learn-user-memory', async (req, res) => {
+  try {
+    const key = req.body.apiKey || API_KEY || process.env.GEMINI_API_KEY;
+    const { transcript } = req.body;
+
+    if (!key || !transcript || transcript.length < 25) {
+      return res.json({ success: false, message: 'Transcript too short or key missing' });
+    }
+
+    const currentProfile = loadUserProfile();
+
+    const prompt = `You are the personal long-term memory engine for Puck, an American native friend talking in English to a Korean adult learner.
+Your job is to learn about the user so you genuinely know their life, habits, interests, and preferences across past and future conversations.
+
+CURRENT USER MEMORY:
+${JSON.stringify(currentProfile, null, 2)}
+
+LATEST CONVERSATION TRANSCRIPT:
+"""
+${transcript}
+"""
+
+TASK:
+Identify any NEW personal facts, life situation (job, where they live/plan to buy a house, car driving), hobbies, opinions, or conversation highlights the user shared in this session.
+Merge them intelligently with the current memory (keep past facts, add new ones, avoid duplicate wording).
+
+Respond with STRICT JSON ONLY matching this format:
+{
+  "interests": ["list of updated/combined interest strings"],
+  "personalFacts": ["list of updated/combined factual statements about user's life"],
+  "learningPreferences": ["list of updated/combined learning preferences"],
+  "recentMemories": ["latest 5 concise bullet points of things we talked about"]
+}`;
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${key}`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 7000);
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0.2,
+          maxOutputTokens: 800,
+          responseMimeType: 'application/json',
+          thinkingConfig: { thinkingBudget: 0 }
+        }
+      }),
+      signal: controller.signal
+    });
+    clearTimeout(timer);
+
+    if (!response.ok) {
+      return res.json({ success: false, error: 'Gemini memory extraction failed' });
+    }
+
+    const data = await response.json();
+    const raw = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+    const learned = JSON.parse(raw);
+
+    const updated = {
+      ...currentProfile,
+      interests: (learned.interests && learned.interests.length > 0) ? learned.interests : currentProfile.interests,
+      personalFacts: (learned.personalFacts && learned.personalFacts.length > 0) ? learned.personalFacts : currentProfile.personalFacts,
+      learningPreferences: (learned.learningPreferences && learned.learningPreferences.length > 0) ? learned.learningPreferences : currentProfile.learningPreferences,
+      recentMemories: (learned.recentMemories && learned.recentMemories.length > 0) ? learned.recentMemories : currentProfile.recentMemories,
+      lastLearned: new Date().toISOString()
+    };
+
+    saveUserProfile(updated);
+    res.json({ success: true, profile: updated });
+  } catch (err) {
+    console.warn('[Learn User Memory Error]:', err.message);
+    res.json({ success: false, error: err.message });
   }
 });
 

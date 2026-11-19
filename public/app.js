@@ -66,9 +66,12 @@ const state = {
   isConnected: false,
   isMuted: false,
   isAiSpeaking: false,
+  isPausedInBackground: false,
+  isExplicitlyEnded: true,
 
   currentTopic: '',
   skillPrompt: '',
+  userProfile: null,
   stealthTargets: [],
   messages: [],      // Finalized chronological turns: [{ role: 'model'|'user', text }]
   corrections: [],   // Extracted tips for notes & Drive sync
@@ -137,6 +140,23 @@ const drillExplText = document.getElementById('drillExplText');
 const drillProgressFill = document.getElementById('drillProgressFill');
 const skipDrillBtn = document.getElementById('skipDrillBtn');
 
+// 🧠 AI Memory Modal DOM Elements
+const memoryBtn = document.getElementById('memoryBtn');
+const memoryModal = document.getElementById('memoryModal');
+const closeMemoryBtn = document.getElementById('closeMemoryBtn');
+const closeMemoryBtn2 = document.getElementById('closeMemoryBtn2');
+const addMemoryFactBtn = document.getElementById('addMemoryFactBtn');
+const memInterestsContainer = document.getElementById('memInterestsContainer');
+const memFactsContainer = document.getElementById('memFactsContainer');
+const memPrefsContainer = document.getElementById('memPrefsContainer');
+const memRecentContainer = document.getElementById('memRecentContainer');
+
+// 💬 Session Resume Banner DOM Elements
+const resumeBanner = document.getElementById('resumeBanner');
+const resumeTopicText = document.getElementById('resumeTopicText');
+const resumeCallBtn = document.getElementById('resumeCallBtn');
+const discardResumeBtn = document.getElementById('discardResumeBtn');
+
 // ==============================================================================
 // 🧹 Speech Transcript & Master Note Deduplicator
 // Cleans repetitive tokens (e.g. "about about about", "and and", "means means")
@@ -187,11 +207,60 @@ function releaseWakeLock() {
   }
 }
 
+// ==============================================================================
+// 📱 App Backgrounding & Seamless Continuity Engine
+// Preserves conversation across home screen switches, lock screens, and apps
+// ==============================================================================
+function saveActiveSessionToStorage() {
+  if (!state.sessionActive || state.messages.length === 0) return;
+  try {
+    sessionStorage.setItem('english_friend_active_session', JSON.stringify({
+      topic: state.currentTopic,
+      messages: state.messages,
+      corrections: state.corrections,
+      voice: state.voice,
+      liveModel: state.liveModel,
+      timestamp: Date.now()
+    }));
+  } catch (e) {}
+}
+
+function showResumeBanner() {
+  if (resumeBanner && state.messages.length > 0) {
+    if (resumeTopicText) resumeTopicText.textContent = `주제: ${state.currentTopic.split('(')[0].trim()}`;
+    resumeBanner.classList.remove('hidden');
+    statusMsg.textContent = '⏸️ 연결이 잠시 일시 중단되었습니다. [이어서 대화]를 눌러 바로 계속하세요.';
+  }
+}
+
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && state.sessionActive) {
-    requestWakeLock();
-    if (playbackCtx && playbackCtx.state === 'suspended') playbackCtx.resume().catch(() => {});
-    if (captureCtx && captureCtx.state === 'suspended') captureCtx.resume().catch(() => {});
+  if (document.visibilityState === 'hidden') {
+    if (state.sessionActive && !state.isExplicitlyEnded) {
+      state.isPausedInBackground = true;
+      saveActiveSessionToStorage();
+      if (state.gdriveWebhookUrl && state.messages.length > 0) {
+        syncToGoogleDrive().catch(() => {});
+      }
+      triggerContinuousMemoryLearning().catch(() => {});
+    }
+  } else if (document.visibilityState === 'visible') {
+    if (state.sessionActive && !state.isExplicitlyEnded) {
+      requestWakeLock();
+      if (playbackCtx && playbackCtx.state === 'suspended') playbackCtx.resume().catch(() => {});
+      if (captureCtx && captureCtx.state === 'suspended') captureCtx.resume().catch(() => {});
+
+      // If WebSocket closed while in background, auto-reconnect immediately!
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        state.isPausedInBackground = false;
+        statusMsg.textContent = `🔄 대화 복구 중... ${state.voice} 연결을 다시 잇고 있습니다`;
+        addSystemPill('🔄 대화 복구 중... 연결을 다시 잇고 있습니다.');
+        connectLiveWebSocket(true).catch(() => {
+          showResumeBanner();
+        });
+      } else {
+        state.isPausedInBackground = false;
+      }
+    }
   }
 });
 
@@ -884,8 +953,35 @@ function buildLiveSystemInstruction() {
     : '';
 
   const recentRecap = state.messages.length > 0
-    ? `\n[RECENT CONVERSATION CONTEXT BEFORE RECONNECT]\n${state.messages.slice(-6).map(m => `${m.role === 'user' ? 'User' : state.voice}: ${m.text}`).join('\n')}\nContinue seamlessly without re-introducing yourself.\n`
+    ? `\n[RECENT CONVERSATION CONTEXT BEFORE RECONNECT]\n${state.messages.slice(-8).map(m => `${m.role === 'user' ? 'User' : state.voice}: ${m.text}`).join('\n')}\nContinue seamlessly without re-introducing yourself.\n`
     : '';
+
+  const mem = state.userProfile || {};
+  const interests = (mem.interests && mem.interests.length > 0)
+    ? mem.interests.join(', ')
+    : 'Gangnam real estate & house hunting, cars & commuting, travel videos';
+  const facts = (mem.personalFacts && mem.personalFacts.length > 0)
+    ? mem.personalFacts.join('; ')
+    : 'Looking to buy a house/apartment in Gangnam; often talks in English while driving in the car';
+  const prefs = (mem.learningPreferences && mem.learningPreferences.length > 0)
+    ? mem.learningPreferences.join('; ')
+    : 'Wants strict 10-repetition drills whenever making an awkward phrase or mistake; prefers friendly American native style';
+  const recentHighlights = (mem.recentMemories && mem.recentMemories.length > 0)
+    ? mem.recentMemories.join('; ')
+    : '';
+
+  const memorySection = `
+[WHO I AM & WHAT YOU PERSONALLY REMEMBER ABOUT ME (LONG-TERM FRIEND MEMORY)]:
+You are not a generic AI bot talking to a stranger. You are ${state.voice}, my real close American friend who knows my life and remembers our past chats!
+- My Interests & Passions: ${interests}
+- Life Situation & Personal Facts: ${facts}
+- My Learning & Conversational Preferences: ${prefs}
+${recentHighlights ? `- Things We Talked About In Past Chats: ${recentHighlights}` : ''}
+
+HOW TO ACT ON THIS KNOWLEDGE:
+- Casually reference or build on things you know about me when relevant (e.g. if we talk about living spaces or homes, you know I'm looking at Gangnam; if I talk about driving, you know my commute stories).
+- Talk to me like a real close friend who has shared history with me, not a robotic stranger. Never say "According to my notes" — just naturally know it like a true friend!
+`;
 
   return `You are ${state.voice}, a close, warm, witty American friend in your 30s having a real-time spoken English conversation over coffee.
 
@@ -924,7 +1020,7 @@ CRITICAL RULES (NON-NEGOTIABLE):
    - If the user asks what a word means ("What does X mean?"), explain it simply in easy English (A2-B1), give 1-2 short everyday example sentences, mention the vibe/nuance, and ask a fun follow-up question using it.
 
 5. TODAY'S TOPIC: ${state.currentTopic}
-${stealthLines}${recentRecap}`;
+${stealthLines}${recentRecap}${memorySection}`;
 }
 
 function connectLiveWebSocket(isReconnect = false) {
@@ -999,7 +1095,7 @@ function connectLiveWebSocket(isReconnect = false) {
         state.reconnectAttempts = 0;
         updateVisuals();
 
-        // Kick off conversation proactively on fresh start!
+        // Kick off conversation proactively on fresh start OR resume seamlessly!
         if (!isReconnect) {
           ws.send(JSON.stringify({
             clientContent: {
@@ -1007,6 +1103,19 @@ function connectLiveWebSocket(isReconnect = false) {
                 role: 'user',
                 parts: [{
                   text: `[Session started] Kick off our chat right now with a super natural, short, fun 2-sentence friend opener about "${state.currentTopic}". Do NOT say "How was your day?" — jump right into a relatable mini-story or fun question!`
+                }]
+              }],
+              turnComplete: true
+            }
+          }));
+        } else {
+          // User returned from background / home screen: seamlessly welcome back and continue!
+          ws.send(JSON.stringify({
+            clientContent: {
+              turns: [{
+                role: 'user',
+                parts: [{
+                  text: `[I just returned to our conversation from background/home screen] In 1 short, warm, natural friend sentence, welcome me back and continue our conversation about "${state.currentTopic}" right where we left off!`
                 }]
               }],
               turnComplete: true
@@ -1054,6 +1163,7 @@ function connectLiveWebSocket(isReconnect = false) {
             lastFinalizedUserText = '';
             analyzeTurnInBackground(userSnap, aiDone.text, aiDone.row);
           }
+          saveActiveSessionToStorage();
           updateVisuals();
         }
       }
@@ -1081,20 +1191,30 @@ function connectLiveWebSocket(isReconnect = false) {
       }
 
       // Seamless auto-reconnect if dropped unexpectedly during an active session
-      if (state.sessionActive && state.reconnectAttempts < 3) {
-        state.reconnectAttempts++;
-        statusMsg.textContent = `🔄 연결이 잠시 끊겨 재연결 중... (${state.reconnectAttempts}/3)`;
-        updateVisuals();
-        setTimeout(() => {
-          if (state.sessionActive) {
-            connectLiveWebSocket(true).catch(() => {
-              endSession(false);
-              addSystemPill('⚠️ 네트워크 연결이 종료되었습니다. 마이크를 눌러 다시 시작해 주세요.');
-            });
-          }
-        }, 900);
-      } else if (state.sessionActive) {
-        endSession(false);
+      if (state.sessionActive && !state.isExplicitlyEnded) {
+        state.isPausedInBackground = true;
+        saveActiveSessionToStorage();
+
+        // If page is currently hidden (user is on home screen/another app), keep session alive!
+        if (document.visibilityState === 'hidden') {
+          console.log('[Live WS] Background paused. Standing by for user return.');
+          return;
+        }
+
+        if (state.reconnectAttempts < 5) {
+          state.reconnectAttempts++;
+          statusMsg.textContent = `🔄 연결 재시도 중... (${state.reconnectAttempts}/5)`;
+          updateVisuals();
+          setTimeout(() => {
+            if (state.sessionActive && !state.isExplicitlyEnded) {
+              connectLiveWebSocket(true).catch(() => {
+                showResumeBanner();
+              });
+            }
+          }, 1200);
+        } else {
+          showResumeBanner();
+        }
       }
     };
   });
@@ -1103,7 +1223,7 @@ function connectLiveWebSocket(isReconnect = false) {
 // ==============================================================================
 // 🚀 Start / Stop / Mute / Text Send Actions
 // ==============================================================================
-async function startSession() {
+async function startSession(isResume = false) {
   if (state.sessionActive || state.isConnecting) return;
 
   // 1. Synchronously unlock AudioContexts inside the tap gesture!
@@ -1118,24 +1238,39 @@ async function startSession() {
   state.sessionActive = true;
   state.isConnecting = true;
   state.isMuted = false;
-  state.messages = [];
-  state.corrections = [];
+  state.isExplicitlyEnded = false;
+  state.isPausedInBackground = false;
   lastFinalizedUserText = '';
 
+  if (resumeBanner) resumeBanner.classList.add('hidden');
   welcomeHero.classList.add('hidden');
   muteBtn.classList.remove('hidden');
   endCallBtn.classList.remove('hidden');
-  chatMessages.innerHTML = '';
+
+  if (!isResume) {
+    state.messages = [];
+    state.corrections = [];
+    chatMessages.innerHTML = '';
+  }
 
   updateVisuals();
-  statusMsg.textContent = `⚡ ${state.voice} 원어민 라이브 연결 중...`;
+  statusMsg.textContent = isResume
+    ? `🔄 ${state.voice} 이전 대화 복원 중...`
+    : `⚡ ${state.voice} 원어민 라이브 연결 중...`;
 
   try {
-    // 2. Request Mic + Load Topic & Stealth Targets in parallel!
+    // 2. Request Mic + Load Topic & User Profile Memory in parallel!
     const [initData] = await Promise.all([
       fetch('/api/session-init').then(r => r.json()).catch(() => ({})),
       startMicCapture()
     ]);
+
+    if (initData && initData.userProfile) {
+      state.userProfile = initData.userProfile;
+      try {
+        localStorage.setItem('user_persona_memory', JSON.stringify(initData.userProfile));
+      } catch (e) {}
+    }
 
     const recentTopics = initData.recentTopics || [];
     state.skillPrompt = initData.skillPrompt || '';
@@ -1147,16 +1282,20 @@ async function startSession() {
     const localPending = localNotes.filter(n => n.status !== 'mastered');
     state.stealthTargets = localPending.length > 0 ? localPending.slice(0, 5) : (initData.pendingTargets || []);
 
-    const availableTopics = TOPICS.filter(t => !recentTopics.some(rt => t.includes(rt) || rt.includes(t)));
-    state.currentTopic = availableTopics.length > 0
-      ? availableTopics[Math.floor(Math.random() * availableTopics.length)]
-      : TOPICS[Math.floor(Math.random() * TOPICS.length)];
-
-    topicText.textContent = state.currentTopic;
-    addSystemPill(`🎙️ ${state.voice} 연결됨 • 주제: ${state.currentTopic.split('(')[0].trim()}`);
+    if (!isResume || !state.currentTopic) {
+      const availableTopics = TOPICS.filter(t => !recentTopics.some(rt => t.includes(rt) || rt.includes(t)));
+      state.currentTopic = availableTopics.length > 0
+        ? availableTopics[Math.floor(Math.random() * availableTopics.length)]
+        : TOPICS[Math.floor(Math.random() * TOPICS.length)];
+      topicText.textContent = state.currentTopic;
+      addSystemPill(`🎙️ ${state.voice} 연결됨 • 주제: ${state.currentTopic.split('(')[0].trim()}`);
+    } else {
+      topicText.textContent = state.currentTopic;
+      addSystemPill(`🔄 이전 대화 재개 • 주제: ${state.currentTopic.split('(')[0].trim()}`);
+    }
 
     // 3. Connect Gemini 3.8 Live WebSocket!
-    await connectLiveWebSocket(false);
+    await connectLiveWebSocket(isResume);
     startVisualizerLoop();
     updateVisuals();
 
@@ -1184,6 +1323,14 @@ async function endSession(autoSave = true) {
   state.isConnecting = false;
   state.isConnected = false;
   state.isMuted = false;
+  state.isExplicitlyEnded = true;
+  state.isPausedInBackground = false;
+
+  try {
+    sessionStorage.removeItem('english_friend_active_session');
+  } catch (e) {}
+
+  if (resumeBanner) resumeBanner.classList.add('hidden');
 
   stopAllAiAudio();
   stopMicCapture();
@@ -1202,8 +1349,9 @@ async function endSession(autoSave = true) {
   updateVisuals();
 
   if (autoSave && state.messages.length > 0) {
-    addSystemPill('📞 통화 종료 • 대화 기록을 자동 저장하고 있습니다...');
+    addSystemPill('📞 통화 종료 • 대화 기록을 자동 저장하고 나에 대한 기억을 학습하고 있습니다...');
     await saveSessionLog(true);
+    triggerContinuousMemoryLearning().catch(() => {});
   } else {
     statusMsg.textContent = '통화가 종료되었습니다. 마이크를 눌러 언제든 다시 시작하세요.';
   }
@@ -1649,6 +1797,124 @@ copyNotesBtn.addEventListener('click', () => {
     .catch(() => alert('복사 권한 오류'));
 });
 
+// ==============================================================================
+// 🧠 AI Long-Term Memory & User Persona Engine
+// Continuously learns from conversations and remembers user facts across sessions
+// ==============================================================================
+async function triggerContinuousMemoryLearning() {
+  if (state.messages.length < 2) return;
+  const transcript = state.messages
+    .map(m => `${m.role === 'user' ? 'Me' : state.voice}: ${m.text}`)
+    .join('\n\n');
+
+  try {
+    const res = await fetch('/api/learn-user-memory', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        transcript,
+        apiKey: state.apiKey
+      })
+    });
+    const data = await res.json();
+    if (data.success && data.profile) {
+      state.userProfile = data.profile;
+      localStorage.setItem('user_persona_memory', JSON.stringify(data.profile));
+      console.log('[AI Memory] User profile learned and updated!');
+    }
+  } catch (e) {
+    console.warn('[AI Memory Learning Warning]:', e.message);
+  }
+}
+
+function renderUserProfileMemory() {
+  const profile = state.userProfile || {};
+
+  // 1. Interests
+  if (memInterestsContainer) {
+    const interests = profile.interests || [];
+    memInterestsContainer.innerHTML = interests.length > 0
+      ? interests.map(item => `<span class="mem-tag">💡 ${escapeHtml(item)}</span>`).join('')
+      : `<span style="color:#9ca3af;font-size:12px;">아직 기록된 관심사가 없습니다.</span>`;
+  }
+
+  // 2. Personal Facts
+  if (memFactsContainer) {
+    const facts = profile.personalFacts || [];
+    memFactsContainer.innerHTML = facts.length > 0
+      ? facts.map(f => `<div class="mem-list-item">${escapeHtml(f)}</div>`).join('')
+      : `<span style="color:#9ca3af;font-size:12px;">대화에서 AI가 자동으로 파악합니다.</span>`;
+  }
+
+  // 3. Preferences
+  if (memPrefsContainer) {
+    const prefs = profile.learningPreferences || [];
+    memPrefsContainer.innerHTML = prefs.length > 0
+      ? prefs.map(p => `<div class="mem-list-item">${escapeHtml(p)}</div>`).join('')
+      : `<span style="color:#9ca3af;font-size:12px;">학습 및 대화 스타일을 분석 중입니다.</span>`;
+  }
+
+  // 4. Recent Memories
+  if (memRecentContainer) {
+    const memories = profile.recentMemories || [];
+    memRecentContainer.innerHTML = memories.length > 0
+      ? memories.map(m => `<div class="mem-list-item">${escapeHtml(m)}</div>`).join('')
+      : `<span style="color:#9ca3af;font-size:12px;">최근 나눈 주요 대화가 여기에 누적됩니다.</span>`;
+  }
+}
+
+async function addMemoryFact() {
+  const userFact = prompt('AI 친구에게 나에 대해 알려주고 싶은 내용을 적어주세요!\n(예: 저는 판교에서 IT 개발자로 일해요 / 강아지를 키워요 / 다음 달에 미국 여행을 가요):');
+  if (!userFact || !userFact.trim()) return;
+
+  const clean = userFact.trim();
+  const current = state.userProfile || {};
+  const updatedFacts = [...(current.personalFacts || []), clean];
+
+  try {
+    const res = await fetch('/api/user-profile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ personalFacts: updatedFacts })
+    });
+    const data = await res.json();
+    if (data.success && data.profile) {
+      state.userProfile = data.profile;
+      localStorage.setItem('user_persona_memory', JSON.stringify(data.profile));
+      renderUserProfileMemory();
+      alert('🎉 새로운 기억이 저장되었습니다! 다음 대화부터 AI 친구가 이 내용을 자연스럽게 알고 대화합니다.');
+    }
+  } catch (e) {
+    alert('기억 저장 실패: ' + e.message);
+  }
+}
+
+// Memory Modal Wiring
+if (memoryBtn) {
+  memoryBtn.addEventListener('click', () => {
+    renderUserProfileMemory();
+    if (memoryModal) memoryModal.classList.remove('hidden');
+  });
+}
+if (closeMemoryBtn) closeMemoryBtn.addEventListener('click', () => memoryModal.classList.add('hidden'));
+if (closeMemoryBtn2) closeMemoryBtn2.addEventListener('click', () => memoryModal.classList.add('hidden'));
+if (addMemoryFactBtn) addMemoryFactBtn.addEventListener('click', addMemoryFact);
+
+// Resume Banner Wiring
+if (resumeCallBtn) {
+  resumeCallBtn.addEventListener('click', () => {
+    if (resumeBanner) resumeBanner.classList.add('hidden');
+    startSession(true); // resume existing session!
+  });
+}
+if (discardResumeBtn) {
+  discardResumeBtn.addEventListener('click', () => {
+    if (resumeBanner) resumeBanner.classList.add('hidden');
+    sessionStorage.removeItem('english_friend_active_session');
+    endSession(false);
+  });
+}
+
 function checkSecureContext() {
   const isLocal = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
   if (!window.isSecureContext && !isLocal && insecureBanner) {
@@ -1679,10 +1945,55 @@ window.addEventListener('beforeunload', () => {
   }
 });
 
-window.addEventListener('DOMContentLoaded', () => {
+window.addEventListener('DOMContentLoaded', async () => {
   loadConfig();
   checkSecureContext();
   updateVisuals();
+
+  // Load User Persona Memory
+  try {
+    const res = await fetch('/api/user-profile');
+    const profile = await res.json();
+    if (profile && profile.personalFacts) {
+      state.userProfile = profile;
+      localStorage.setItem('user_persona_memory', JSON.stringify(profile));
+    }
+  } catch (e) {
+    try {
+      state.userProfile = JSON.parse(localStorage.getItem('user_persona_memory') || '{}');
+    } catch (err) {}
+  }
+
+  // Restore Active Session if user refreshed or navigated back within 1 hour
+  try {
+    const savedRaw = sessionStorage.getItem('english_friend_active_session');
+    if (savedRaw) {
+      const saved = JSON.parse(savedRaw);
+      if (saved && saved.messages && saved.messages.length > 0 && (Date.now() - (saved.timestamp || 0)) < 3600000) {
+        state.currentTopic = saved.topic || '';
+        state.messages = saved.messages;
+        state.corrections = saved.corrections || [];
+        if (saved.voice) state.voice = saved.voice;
+
+        welcomeHero.classList.add('hidden');
+        chatMessages.innerHTML = '';
+        saved.messages.forEach(m => {
+          const row = document.createElement('div');
+          row.className = `msg-row ${m.role === 'user' ? 'user' : 'ai'}`;
+          const avatarLetter = (state.voice || 'P')[0].toUpperCase();
+          row.innerHTML = `
+            <div class="msg-meta">
+              ${m.role === 'user' ? '<span class="msg-sender">Me</span>' : `<span class="msg-avatar">${escapeHtml(avatarLetter)}</span><span class="msg-sender">${escapeHtml(state.voice)}</span>`}
+            </div>
+            <div class="msg-bubble">${escapeHtml(m.text)}</div>
+          `;
+          chatMessages.appendChild(row);
+        });
+
+        showResumeBanner();
+      }
+    }
+  } catch (e) {}
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(() => {});
