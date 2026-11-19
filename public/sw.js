@@ -1,4 +1,4 @@
-const CACHE_NAME = 'english-friend-v20-live';
+const CACHE_NAME = 'english-friend-v22-live-drill';
 
 self.addEventListener('install', (e) => {
   self.skipWaiting();

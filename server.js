@@ -27,6 +27,26 @@ try {
 const MASTER_JSON_PATH = path.join(STUDY_LOGS_DIR, 'MASTER_REVIEW_NOTES.json');
 const MASTER_MD_PATH = path.join(STUDY_LOGS_DIR, '누적_복습_표현노트.md');
 
+function deduplicateWords(str) {
+  if (!str || typeof str !== 'string') return '';
+  let text = str.trim();
+  const words = text.split(/\s+/);
+  const dedupWords = [];
+  for (let i = 0; i < words.length; i++) {
+    const curr = words[i];
+    const cleanCurr = curr.toLowerCase().replace(/[^a-z0-9]/gi, '');
+    const prev = dedupWords[dedupWords.length - 1];
+    const cleanPrev = prev ? prev.toLowerCase().replace(/[^a-z0-9]/gi, '') : '';
+    if (cleanCurr && cleanPrev && cleanCurr === cleanPrev) {
+      continue;
+    }
+    dedupWords.push(curr);
+  }
+  text = dedupWords.join(' ');
+  text = text.replace(/\b(\w+\s+\w+)(\s+\1)+\b/gi, '$1');
+  return text.trim();
+}
+
 function loadMasterNotes() {
   if (fs.existsSync(MASTER_JSON_PATH)) {
     try {
@@ -83,7 +103,16 @@ function readSkillPrompt() {
   } catch (e) {
     console.warn('SKILL.md read warning:', e.message);
   }
-  return `You are a warm, witty 30s American English friend. Speak 100% natural native English ONLY (never Korean). Keep turns short (1-3 sentences) for fast ping-pong conversation. Understand natural connected speech effortlessly. When the user says something awkward, warmly say: "Hey, did you mean '...'? Native speakers usually say '[Natural Expression]'. Wanna try saying it once?"`;
+  return `You are Puck, a warm, witty 30s American English friend.
+1. 100% PURE NATIVE AMERICAN ENGLISH ONLY (Zero Korean).
+2. STRICT ERROR CORRECTION & 10-REPETITION TURN-TAKING DRILL:
+   Whenever the user says ANY awkward phrasing, grammatical mistake, or Konglish (e.g. "A want to buy", "houses price is getting increasing", "I eat medicine", "yesterday I sleep early", "neighborhood means people who live next to me"):
+   DO NOT ignore it and DO NOT just keep chatting!
+   Immediately lead a 10-repetition drill:
+   - "You said '[User's phrase]', but native speakers usually say: '[Target]'. [1 brief sentence explanation of the nuance]. Let's practice this 10 times so it rolls off your tongue! Repeat after me. Number 1: [Target]"
+   - Wait for user repetition, then: "Number 2: [Target]" -> wait -> "Number 3: [Target]" -> all the way to "Number 10: [Target]".
+   - After count 10: "Awesome! 10 times completed! Great job. Now back to our talk: [Follow-up question]"
+3. NOISE REJECTION: Ignore clothing rustle, car noise, breathing, or unintelligible noise completely. Stay silent until clear English speech is heard.`;
 }
 
 function getLocalIpAddresses() {
@@ -217,8 +246,8 @@ If it was just normal casual chatting with NO correction or vocabulary teaching,
     if (parsed && parsed.hasTip && parsed.corrected) {
       return res.json({
         hasTip: true,
-        original: String(parsed.original || userText).trim(),
-        corrected: String(parsed.corrected).trim(),
+        original: deduplicateWords(String(parsed.original || userText).trim()),
+        corrected: deduplicateWords(String(parsed.corrected).trim()),
         explanation: String(parsed.explanation || '').trim()
       });
     }
@@ -293,13 +322,15 @@ ${fullTranscript || '(No transcript recorded)'}
 
     if (corrections && Array.isArray(corrections)) {
       corrections.forEach(c => {
-        const exists = masterNotes.some(m => m.corrected.toLowerCase() === (c.corrected || '').toLowerCase());
-        if (!exists && c.corrected) {
+        const cleanOrig = deduplicateWords(c.original || '');
+        const cleanCorr = deduplicateWords(c.corrected || '');
+        const exists = masterNotes.some(m => deduplicateWords(m.corrected).toLowerCase() === cleanCorr.toLowerCase());
+        if (!exists && cleanCorr) {
           masterNotes.push({
             dateAdded: today,
-            original: c.original,
-            corrected: c.corrected,
-            explanation: c.explanation,
+            original: cleanOrig,
+            corrected: cleanCorr,
+            explanation: c.explanation || '',
             status: 'pending'
           });
         }
@@ -322,7 +353,7 @@ ${fullTranscript || '(No transcript recorded)'}
 // Google Drive Sync Endpoint
 app.post('/api/sync-gdrive', async (req, res) => {
   try {
-    const { topic, corrections, fullTranscript, webhookUrl } = req.body;
+    const { topic, corrections, fullTranscript, webhookUrl, date } = req.body;
     const targetUrl = webhookUrl || process.env.GDRIVE_WEBHOOK_URL;
     if (!targetUrl) {
       return res.status(400).json({ error: 'Google Drive Webhook URL is missing.' });
@@ -332,13 +363,14 @@ app.post('/api/sync-gdrive', async (req, res) => {
       topic: topic || 'Daily Conversation',
       corrections: corrections || [],
       fullTranscript: fullTranscript || '',
-      date: new Date().toISOString().split('T')[0]
+      date: date || new Date().toISOString().split('T')[0]
     };
 
     const gRes = await fetch(targetUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      redirect: 'follow'
     });
 
     const result = await gRes.json().catch(() => ({ success: true, message: 'Google Drive sync requested.' }));

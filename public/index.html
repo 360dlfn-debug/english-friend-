@@ -54,6 +54,32 @@
       <span class="latency-chip" id="liveChip">Gemini 3.8 Live</span>
     </div>
 
+    <!-- 10-Repetition Live Drill Banner (Interactive Turn-by-Turn Card) -->
+    <div id="drillBanner" class="drill-banner hidden">
+      <div class="drill-banner-top">
+        <div class="drill-title-wrap">
+          <span class="drill-badge">🎯 10회 집중 반복 훈련</span>
+          <span id="drillCountBadge" class="drill-count-badge">Count 1 / 10</span>
+        </div>
+        <button id="skipDrillBtn" class="drill-skip-btn" title="훈련 건너뛰고 대화 계속하기">건너뛰기 &times;</button>
+      </div>
+      <div class="drill-content">
+        <div class="drill-row">
+          <span class="tag-bad">내가 한 말</span>
+          <span id="drillOrigText" class="orig-text">-</span>
+        </div>
+        <div class="drill-row">
+          <span class="tag-good">원어민 추천 표현</span>
+          <span id="drillTargetText" class="target-text">-</span>
+        </div>
+        <p id="drillExplText" class="drill-expl"></p>
+      </div>
+      <div class="drill-progress-bar">
+        <div id="drillProgressFill" class="drill-progress-fill" style="width: 10%;"></div>
+      </div>
+      <span class="drill-hint">AI 목소리를 듣고 따라 말하세요 • 10회 완료 시 자동 저장됩니다</span>
+    </div>
+
     <!-- Scrolling Real-Time Chat Feed -->
     <main class="chat-feed" id="chatFeed">
       <!-- Welcome Hero (Hidden once conversation starts) -->

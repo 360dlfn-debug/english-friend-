@@ -58,7 +58,7 @@ const state = {
   liveModel: localStorage.getItem('live_model') || 'models/gemini-3.8-live',
   voice: localStorage.getItem('live_voice') || 'Puck',
   silenceDurationMs: parseInt(localStorage.getItem('live_silence_ms') || '900', 10),
-  bargeInSensitivity: localStorage.getItem('live_bargein') || 'START_SENSITIVITY_HIGH',
+  bargeInSensitivity: localStorage.getItem('live_bargein') || 'START_SENSITIVITY_LOW',
   gdriveWebhookUrl: localStorage.getItem('gdrive_webhook_url') || DEFAULT_GDRIVE_WEBHOOK,
 
   sessionActive: false,
@@ -127,6 +127,46 @@ const closeNotesBtn = document.getElementById('closeNotesBtn');
 const closeNotesBtn2 = document.getElementById('closeNotesBtn2');
 const copyNotesBtn = document.getElementById('copyNotesBtn');
 const notesListContainer = document.getElementById('notesListContainer');
+
+// 🎯 10-Repetition Live Drill Banner DOM Elements
+const drillBanner = document.getElementById('drillBanner');
+const drillCountBadge = document.getElementById('drillCountBadge');
+const drillOrigText = document.getElementById('drillOrigText');
+const drillTargetText = document.getElementById('drillTargetText');
+const drillExplText = document.getElementById('drillExplText');
+const drillProgressFill = document.getElementById('drillProgressFill');
+const skipDrillBtn = document.getElementById('skipDrillBtn');
+
+// ==============================================================================
+// 🧹 Speech Transcript & Master Note Deduplicator
+// Cleans repetitive tokens (e.g. "about about about", "and and", "means means")
+// ==============================================================================
+function deduplicateAll(str) {
+  if (!str || typeof str !== 'string') return '';
+  let text = str.trim();
+  if (!text) return '';
+
+  // 1. Single word deduplication (case-insensitive adjacent duplicate words)
+  const words = text.split(/\s+/);
+  const dedupWords = [];
+  for (let i = 0; i < words.length; i++) {
+    const curr = words[i];
+    const cleanCurr = curr.toLowerCase().replace(/[^a-z0-9]/gi, '');
+    const prev = dedupWords[dedupWords.length - 1];
+    const cleanPrev = prev ? prev.toLowerCase().replace(/[^a-z0-9]/gi, '') : '';
+    if (cleanCurr && cleanPrev && cleanCurr === cleanPrev) {
+      continue;
+    }
+    dedupWords.push(curr);
+  }
+  text = dedupWords.join(' ');
+
+  // 2. Multi-word phrase deduplication (e.g. "in the house in the house")
+  text = text.replace(/\b(\w+\s+\w+)(\s+\1)+\b/gi, '$1');
+  text = text.replace(/\b(\w+\s+\w+\s+\w+)(\s+\1)+\b/gi, '$1');
+
+  return text.trim();
+}
 
 // ==============================================================================
 // 💡 Screen Wake Lock (Keep mobile screen awake during voice calls)
@@ -205,6 +245,8 @@ class Pcm16CaptureProcessor extends AudioWorkletProcessor {
     this.outIdx = 0;
     this.resamplePos = 0;
     this.lastSample = 0;
+    this.noiseThreshold = 0.016; // Noise gate threshold (clothing rustle & ambient filter)
+    this.hangoverFrames = 0;     // Hangover frames to prevent clipping word endings
   }
 
   process(inputs) {
@@ -219,6 +261,14 @@ class Pcm16CaptureProcessor extends AudioWorkletProcessor {
     }
     const rms = Math.sqrt(sumSq / channel.length);
 
+    // Noise Gate: Sub-threshold noise (clothing rustles, breath) is gated to zero
+    if (rms >= this.noiseThreshold) {
+      this.hangoverFrames = 10; // ~250ms hangover
+    } else if (this.hangoverFrames > 0) {
+      this.hangoverFrames--;
+    }
+    const isGated = (this.hangoverFrames === 0);
+
     while (this.resamplePos < channel.length) {
       const idx = Math.floor(this.resamplePos);
       const frac = this.resamplePos - idx;
@@ -226,11 +276,14 @@ class Pcm16CaptureProcessor extends AudioWorkletProcessor {
       const s1 = idx + 1 < channel.length ? channel[idx + 1] : channel[idx];
       let sample = s0 + (s1 - s0) * frac;
       sample = Math.max(-1, Math.min(1, sample));
+      if (isGated) {
+        sample = 0; // Pure silence during clothing rustle
+      }
       this.outBuf[this.outIdx++] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
 
       if (this.outIdx >= this.chunkSamples) {
         const copy = new Int16Array(this.outBuf);
-        this.port.postMessage({ pcm: copy.buffer, rms }, [copy.buffer]);
+        this.port.postMessage({ pcm: copy.buffer, rms: isGated ? 0 : rms }, [copy.buffer]);
         this.outIdx = 0;
       }
       this.resamplePos += ratio;
@@ -350,23 +403,36 @@ async function startMicCapture() {
   captureScriptNode = captureCtx.createScriptProcessor(bufferSize, 1, 1);
   const inputRate = captureCtx.sampleRate;
   const ratio = inputRate / 16000;
+  let scriptGateHangover = 0;
 
   captureScriptNode.onaudioprocess = (e) => {
     const input = e.inputBuffer.getChannelData(0);
     let sumSq = 0;
     for (let i = 0; i < input.length; i++) sumSq += input[i] * input[i];
-    currentMicRms = state.isMuted ? 0 : Math.sqrt(sumSq / input.length);
+    const rawRms = Math.sqrt(sumSq / input.length);
+
+    if (rawRms >= 0.016) {
+      scriptGateHangover = 8;
+    } else if (scriptGateHangover > 0) {
+      scriptGateHangover--;
+    }
+    const isGated = (scriptGateHangover === 0);
+    currentMicRms = (state.isMuted || isGated) ? 0 : rawRms;
 
     const outLen = Math.floor(input.length / ratio);
     const pcm16 = new Int16Array(outLen);
     for (let i = 0; i < outLen; i++) {
-      const pos = i * ratio;
-      const idx = Math.floor(pos);
-      const frac = pos - idx;
-      const s0 = input[idx] || 0;
-      const s1 = input[idx + 1] !== undefined ? input[idx + 1] : s0;
-      const s = Math.max(-1, Math.min(1, s0 + (s1 - s0) * frac));
-      pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+      if (isGated) {
+        pcm16[i] = 0;
+      } else {
+        const pos = i * ratio;
+        const idx = Math.floor(pos);
+        const frac = pos - idx;
+        const s0 = input[idx] || 0;
+        const s1 = input[idx + 1] !== undefined ? input[idx + 1] : s0;
+        const s = Math.max(-1, Math.min(1, s0 + (s1 - s0) * frac));
+        pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+      }
     }
     sendPcmChunkToLive(pcm16.buffer);
   };
@@ -561,7 +627,7 @@ function appendUserTranscript(delta) {
   if (!delta) return;
   const b = ensureUserBubble();
   b.text = normalizeStreamingText(b.text + delta);
-  b.bubble.textContent = b.text;
+  b.bubble.textContent = deduplicateAll(b.text);
   scrollChatToBottom(false);
 }
 
@@ -571,7 +637,7 @@ function finalizeUserBubble() {
   activeUserBubble = null;
 
   finalized.row.classList.remove('streaming');
-  const cleanText = finalized.text.trim();
+  const cleanText = deduplicateAll(finalized.text.trim());
   if (!cleanText) {
     finalized.row.remove();
     return null;
@@ -647,7 +713,128 @@ function finalizeAiBubble(wasInterrupted = false) {
   }
 
   state.messages.push({ role: 'model', text: cleanText });
+  inspectAiTranscriptForDrill(cleanText);
   return { row: finalized.row, text: cleanText };
+}
+
+// ==============================================================================
+// 🎯 10-Repetition Live Turn-Taking Drill Engine
+// ==============================================================================
+const drillState = {
+  active: false,
+  count: 0,
+  original: '',
+  target: '',
+  explanation: ''
+};
+
+function showDrillBanner(orig, target, expl, count = 1) {
+  drillState.active = true;
+  drillState.original = orig || drillState.original || '';
+  drillState.target = target || drillState.target || '';
+  drillState.explanation = expl || drillState.explanation || '';
+  drillState.count = count;
+
+  if (drillOrigText) drillOrigText.textContent = drillState.original || '-';
+  if (drillTargetText) drillTargetText.textContent = drillState.target || '-';
+  if (drillExplText) drillExplText.textContent = drillState.explanation ? `💡 ${drillState.explanation}` : '';
+  if (drillCountBadge) {
+    drillCountBadge.textContent = `Count ${drillState.count} / 10`;
+    drillCountBadge.style.background = '#f59e0b';
+    drillCountBadge.style.color = '#111827';
+  }
+  if (drillProgressFill) drillProgressFill.style.width = `${Math.min(100, (drillState.count / 10) * 100)}%`;
+  if (drillBanner) drillBanner.classList.remove('hidden');
+}
+
+function updateDrillCount(count) {
+  if (!drillState.active && count > 1) {
+    drillState.active = true;
+    if (drillBanner) drillBanner.classList.remove('hidden');
+  }
+  drillState.count = count;
+  if (drillCountBadge) drillCountBadge.textContent = `Count ${drillState.count} / 10`;
+  if (drillProgressFill) drillProgressFill.style.width = `${Math.min(100, (drillState.count / 10) * 100)}%`;
+
+  if (count >= 10) {
+    if (drillCountBadge) {
+      drillCountBadge.textContent = `🎉 10회 완료!`;
+      drillCountBadge.style.background = '#10b981';
+      drillCountBadge.style.color = '#ffffff';
+    }
+    if (drillProgressFill) drillProgressFill.style.width = '100%';
+
+    if (drillState.target) {
+      const tip = {
+        original: drillState.original,
+        corrected: drillState.target,
+        explanation: drillState.explanation || '10회 집중 반복 훈련 완료'
+      };
+      state.corrections.push(tip);
+      accumulateMasterNote(tip);
+      if (state.gdriveWebhookUrl) {
+        syncToGoogleDrive().catch(() => {});
+      }
+    }
+
+    setTimeout(() => {
+      if (drillBanner && drillState.count >= 10) {
+        drillBanner.classList.add('hidden');
+        drillState.active = false;
+        if (drillCountBadge) {
+          drillCountBadge.style.background = '#f59e0b';
+          drillCountBadge.style.color = '#111827';
+        }
+      }
+    }, 3500);
+  }
+}
+
+function inspectAiTranscriptForDrill(aiText) {
+  if (!aiText) return;
+
+  // 1. Check for initial drill initiation: "You said '...', but native speakers usually say: '...'"
+  const startMatch = aiText.match(/You said ['"“]([^'"“”]+)['"”],?\s*but native speakers (?:usually )?say:?\s*['"“]([^'"“”]+)['"”](?:\.?\s*([^.!?\n]+[.!?]))?/i);
+  if (startMatch) {
+    const orig = deduplicateAll(startMatch[1].trim());
+    const target = deduplicateAll(startMatch[2].trim());
+    const expl = (startMatch[3] || '').trim();
+    showDrillBanner(orig, target, expl, 1);
+    return;
+  }
+
+  // 2. Check for turn-by-turn number prompt: "Number 2: ...", "Number 3: ...", up to "Number 10: ..."
+  const numMatch = aiText.match(/\b(?:Number|Count|Round)\s*(\d+)\b/i);
+  if (numMatch) {
+    const count = parseInt(numMatch[1], 10);
+    if (count >= 1 && count <= 10) {
+      if (!drillState.active) {
+        const afterColon = aiText.split(/Number \d+[:.]?/i)[1];
+        const targetCandidate = afterColon ? afterColon.replace(/[.!?].*$/, '').trim() : '';
+        showDrillBanner('', targetCandidate, '', count);
+      } else {
+        updateDrillCount(count);
+      }
+    }
+  } else if (aiText.match(/10 times completed|10th time completed|completed 10 times|all 10 times/i)) {
+    updateDrillCount(10);
+  }
+}
+
+function dismissDrill() {
+  drillState.active = false;
+  if (drillBanner) drillBanner.classList.add('hidden');
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({
+      clientContent: {
+        turns: [{
+          role: 'user',
+          parts: [{ text: `[Drill skipped] Let's continue chatting about ${state.currentTopic}!` }]
+        }],
+        turnComplete: true
+      }
+    }));
+  }
 }
 
 function renderInlineTipCard(aiRowEl, tip) {
@@ -700,27 +887,43 @@ function buildLiveSystemInstruction() {
     ? `\n[RECENT CONVERSATION CONTEXT BEFORE RECONNECT]\n${state.messages.slice(-6).map(m => `${m.role === 'user' ? 'User' : state.voice}: ${m.text}`).join('\n')}\nContinue seamlessly without re-introducing yourself.\n`
     : '';
 
-  return `You are ${state.voice}, a warm, witty, genuine 30s American English-speaking close friend chatting over coffee.
+  return `You are ${state.voice}, a close, warm, witty American friend in your 30s having a real-time spoken English conversation over coffee.
 
-CRITICAL RULES:
+CRITICAL RULES (NON-NEGOTIABLE):
 1. 100% PURE NATIVE AMERICAN ENGLISH ONLY:
-   - NEVER speak Korean or pronounce any Korean words under any circumstance.
-   - Speak naturally with authentic American rhythm, contractions, and connected speech (gonna, wanna, kinda, didn't, what's up).
-2. REAL PING-PONG CONVERSATION (FAST, SHORT TURNS):
-   - Keep EVERY turn crisp and lively: 1 to 3 short sentences max.
-   - Never give long monologues or textbook lectures. Always keep the chat bouncing back and forth.
-3. CONNECTED SPEECH (연음) LISTENING:
-   - The user wants to speak fast, casual, connected English like a native speaker.
-   - Understand their connected speech, linking, and reductions naturally from context without being nitpicky.
-4. NATURAL FRIENDLY COACHING & PRACTICE (EXACT STYLE):
-   - When the user says something noticeably unnatural, awkward, or Konglish (e.g. "I eat medicine", "yesterday I sleep early"):
-     * React like a friend and check naturally in English: "Wait — did you mean '[what they meant]'? Native speakers usually say '[Natural Native Expression]'. Wanna try saying it once?"
-     * Let them try saying it (1–2 natural reps, NEVER force 10 robotic reps unless they ask).
-     * Once they repeat it, cheer them on briefly ("Nice, that sounded super natural!") and bounce right back into the chat!
-   - Do NOT correct every single turn. If their English is already natural enough, just keep chatting like real friends!
-5. UNKNOWN WORDS:
-   - If the user asks what a word means ("What does X mean?"), explain it simply in easy English (A2-B1), give 1–2 short everyday example sentences, mention the vibe/nuance, and ask a fun follow-up question using it.
-6. TODAY'S TOPIC: ${state.currentTopic}
+   - NEVER speak Korean and NEVER attempt to pronounce Korean words.
+   - Speak naturally with authentic American rhythm, contractions, and connected speech (gonna, wanna, kinda, didn't, what's up, you know).
+
+2. STRICT SENTENCE-BY-SENTENCE CORRECTION & MANDATORY 10-REPETITION TURN-TAKING DRILL:
+   - The user's number-one priority is to catch mistakes and build English muscle memory.
+   - Whenever the user makes ANY awkward phrasing, grammatical slip, Konglish, broken sentence, or unnatural word choice (e.g., "A want to buy", "houses price is getting increasing", "I eat medicine", "yesterday I sleep early", "neighborhood means people who live next to me", "videos about traveling and looking around the house"):
+     * DO NOT ignore it! DO NOT let it slide and DO NOT just continue the conversation without fixing it!
+     * Step 1 (Point out & Count 1):
+       "You said '[User's awkward phrase]', but native speakers usually say: '[Target Native Expression]'. [1 brief sentence explanation of the nuance]. Let's practice this 10 times so it rolls off your tongue! Repeat after me. Number 1: [Target Native Expression]"
+     * Step 2 (Turn-by-Turn Drill Count 2 to 10):
+       Wait for the user to repeat. After each repetition, prompt the next count:
+       "Number 2: [Target Native Expression]" -> wait for user ->
+       "Number 3: [Target Native Expression]" -> wait for user ->
+       "Number 4: [Target Native Expression]" -> wait for user ->
+       "Number 5: [Target Native Expression]" -> wait for user ->
+       "Number 6: [Target Native Expression]" -> wait for user ->
+       "Number 7: [Target Native Expression]" -> wait for user ->
+       "Number 8: [Target Native Expression]" -> wait for user ->
+       "Number 9: [Target Native Expression]" -> wait for user ->
+       "Number 10: [Target Native Expression]"
+     * Step 3 (Celebration & Continuation):
+       After Count 10:
+       "Awesome! 10 times completed! Great job. Now back to our talk: [Engaging follow-up question]"
+   - If the user's sentence is already natural and correct, keep the chat rolling with 1 to 3 lively conversational sentences.
+
+3. NOISE & RUSTLING REJECTION:
+   - Completely ignore clothing friction, jacket rustling, car engine hum, breathing, or unintelligible noise.
+   - If the audio is just rustle or unclear ambient noise, REMAIN SILENT. Never hallucinate words or answer noise.
+
+4. UNKNOWN WORDS:
+   - If the user asks what a word means ("What does X mean?"), explain it simply in easy English (A2-B1), give 1-2 short everyday example sentences, mention the vibe/nuance, and ask a fun follow-up question using it.
+
+5. TODAY'S TOPIC: ${state.currentTopic}
 ${stealthLines}${recentRecap}`;
 }
 
@@ -1090,21 +1293,26 @@ function updateVisuals() {
 // ==============================================================================
 function accumulateMasterNote(corr) {
   if (!corr || !corr.corrected) return;
+  const cleanOriginal = deduplicateAll(corr.original || '');
+  const cleanCorrected = deduplicateAll(corr.corrected || '');
+  if (!cleanCorrected) return;
+
   let notes = [];
   try {
     notes = JSON.parse(localStorage.getItem('master_review_notes') || '[]');
   } catch (e) {}
 
-  const exists = notes.some(n => n.corrected.toLowerCase() === corr.corrected.toLowerCase());
+  const exists = notes.some(n => deduplicateAll(n.corrected).toLowerCase() === cleanCorrected.toLowerCase());
   if (!exists) {
     const today = new Date().toISOString().split('T')[0];
-    notes.unshift({
+    const newEntry = {
       dateAdded: today,
-      original: corr.original || '',
-      corrected: corr.corrected,
+      original: cleanOriginal,
+      corrected: cleanCorrected,
       explanation: corr.explanation || '',
       status: 'pending'
-    });
+    };
+    notes.unshift(newEntry);
     localStorage.setItem('master_review_notes', JSON.stringify(notes));
 
     fetch('/api/save-log', {
@@ -1112,7 +1320,7 @@ function accumulateMasterNote(corr) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         topic: state.currentTopic,
-        corrections: [corr],
+        corrections: [newEntry],
         voice: state.voice
       })
     }).catch(() => {});
@@ -1133,7 +1341,8 @@ async function syncToGoogleDrive(fullTranscript = '') {
         topic: state.currentTopic || 'English Conversation',
         corrections: state.corrections,
         fullTranscript: transcript,
-        webhookUrl: state.gdriveWebhookUrl
+        webhookUrl: state.gdriveWebhookUrl,
+        date: new Date().toISOString().split('T')[0]
       })
     });
     return await res.json();
@@ -1187,6 +1396,21 @@ function renderMasterNotes() {
   try {
     notes = JSON.parse(localStorage.getItem('master_review_notes') || '[]');
   } catch (e) {}
+
+  // Auto-clean any duplicated tokens from existing localStorage
+  let modified = false;
+  notes = notes.map(item => {
+    const origClean = deduplicateAll(item.original || '');
+    const corrClean = deduplicateAll(item.corrected || '');
+    if (origClean !== item.original || corrClean !== item.corrected) {
+      modified = true;
+      return { ...item, original: origClean, corrected: corrClean };
+    }
+    return item;
+  });
+  if (modified) {
+    localStorage.setItem('master_review_notes', JSON.stringify(notes));
+  }
 
   if (!notes.length) {
     notesListContainer.innerHTML = `<p class="empty-notes">아직 누적된 교정 표현이 없습니다.<br>대화 중 친구가 알려준 원어민 표현이 자동 저장됩니다.</p>`;
@@ -1431,6 +1655,29 @@ function checkSecureContext() {
     insecureBanner.classList.remove('hidden');
   }
 }
+
+if (skipDrillBtn) {
+  skipDrillBtn.addEventListener('click', dismissDrill);
+}
+
+// Auto-sync to Google Drive when tab closes or changes visibility
+window.addEventListener('beforeunload', () => {
+  if (state.sessionActive && state.messages.length > 0 && state.gdriveWebhookUrl) {
+    const fullTranscript = state.messages
+      .map(m => `${m.role === 'user' ? 'Me' : state.voice}: ${m.text}`)
+      .join('\n\n');
+    const payload = JSON.stringify({
+      topic: state.currentTopic || 'English Conversation',
+      corrections: state.corrections,
+      fullTranscript,
+      webhookUrl: state.gdriveWebhookUrl,
+      date: new Date().toISOString().split('T')[0]
+    });
+    try {
+      navigator.sendBeacon('/api/sync-gdrive', new Blob([payload], { type: 'application/json' }));
+    } catch (e) {}
+  }
+});
 
 window.addEventListener('DOMContentLoaded', () => {
   loadConfig();
