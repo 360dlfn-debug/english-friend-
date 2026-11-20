@@ -1186,7 +1186,11 @@ function connectLiveWebSocket(isReconnect = false) {
       finalizeUserBubble();
 
       if (!setupDone) {
-        reject(new Error(ev.reason || `연결 종료 (code ${ev.code})`));
+        let reason = ev.reason;
+        if (reason && (reason.includes('prepayment credits') || reason.includes('depleted') || reason.includes('RESOURCE_EXHAUSTED'))) {
+          reason = 'Google AI Studio API 크레딧(선불 잔액)이 소진되었습니다. 우측 상단 ⚙️ 설정에서 새 API 키를 등록하거나 크레딧을 충전해 주세요.';
+        }
+        reject(new Error(reason || `연결 종료 (code ${ev.code})`));
         return;
       }
 
@@ -1310,9 +1314,15 @@ async function startSession(isResume = false) {
     endCallBtn.classList.add('hidden');
     updateVisuals();
 
-    const msg = (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError')
-      ? '⚠️ 마이크 권한이 거부되었습니다. 브라우저 주소창 옆 권한 설정에서 마이크를 허용해 주세요.'
-      : `⚠️ 연결 실패: ${err.message}`;
+    let msg = `⚠️ 연결 실패: ${err.message}`;
+    if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+      msg = '⚠️ 마이크 권한이 거부되었습니다. 브라우저 주소창 옆 권한 설정에서 마이크를 허용해 주세요.';
+    } else if (err.message && (err.message.includes('크레딧') || err.message.includes('prepayment credits') || err.message.includes('depleted') || err.message.includes('RESOURCE_EXHAUSTED'))) {
+      msg = '⚠️ Google AI Studio 크레딧(선불 잔액) 소진: ⚙️ 설정에서 새 API 키를 입력해 주세요.';
+      setTimeout(() => {
+        if (settingsBtn) settingsBtn.click();
+      }, 1000);
+    }
     statusMsg.textContent = msg;
     addSystemPill(msg);
   }
