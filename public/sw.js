@@ -1,4 +1,4 @@
-const CACHE_NAME = 'english-friend-v23-memory-resume';
+const CACHE_NAME = 'english-friend-v24-strict-drill-retry';
 
 self.addEventListener('install', (e) => {
   self.skipWaiting();

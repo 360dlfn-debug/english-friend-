@@ -816,16 +816,26 @@ function showDrillBanner(orig, target, expl, count = 1) {
   if (drillBanner) drillBanner.classList.remove('hidden');
 }
 
-function updateDrillCount(count) {
-  if (!drillState.active && count > 1) {
+function updateDrillCount(count, isRetry = false) {
+  if (!drillState.active && count >= 1) {
     drillState.active = true;
     if (drillBanner) drillBanner.classList.remove('hidden');
   }
   drillState.count = count;
-  if (drillCountBadge) drillCountBadge.textContent = `Count ${drillState.count} / 10`;
+  if (drillCountBadge) {
+    if (isRetry) {
+      drillCountBadge.textContent = `Count ${drillState.count} / 10 🔄 다시 시도`;
+      drillCountBadge.style.background = '#ef4444';
+      drillCountBadge.style.color = '#ffffff';
+    } else {
+      drillCountBadge.textContent = `Count ${drillState.count} / 10`;
+      drillCountBadge.style.background = '#f59e0b';
+      drillCountBadge.style.color = '#111827';
+    }
+  }
   if (drillProgressFill) drillProgressFill.style.width = `${Math.min(100, (drillState.count / 10) * 100)}%`;
 
-  if (count >= 10) {
+  if (count >= 10 && !isRetry) {
     if (drillCountBadge) {
       drillCountBadge.textContent = `🎉 10회 완료!`;
       drillCountBadge.style.background = '#10b981';
@@ -872,7 +882,8 @@ function inspectAiTranscriptForDrill(aiText) {
     return;
   }
 
-  // 2. Check for turn-by-turn number prompt: "Number 2: ...", "Number 3: ...", up to "Number 10: ..."
+  // 2. Check for turn-by-turn number prompt with retry detection
+  const isRetry = /\b(retry|again|redo|once more|one more time|repeat Number)\b/i.test(aiText);
   const numMatch = aiText.match(/\b(?:Number|Count|Round)\s*(\d+)\b/i);
   if (numMatch) {
     const count = parseInt(numMatch[1], 10);
@@ -882,11 +893,11 @@ function inspectAiTranscriptForDrill(aiText) {
         const targetCandidate = afterColon ? afterColon.replace(/[.!?].*$/, '').trim() : '';
         showDrillBanner('', targetCandidate, '', count);
       } else {
-        updateDrillCount(count);
+        updateDrillCount(count, isRetry);
       }
     }
   } else if (aiText.match(/10 times completed|10th time completed|completed 10 times|all 10 times/i)) {
-    updateDrillCount(10);
+    updateDrillCount(10, false);
   }
 }
 
@@ -990,26 +1001,26 @@ CRITICAL RULES (NON-NEGOTIABLE):
    - NEVER speak Korean and NEVER attempt to pronounce Korean words.
    - Speak naturally with authentic American rhythm, contractions, and connected speech (gonna, wanna, kinda, didn't, what's up, you know).
 
-2. STRICT SENTENCE-BY-SENTENCE CORRECTION & MANDATORY 10-REPETITION TURN-TAKING DRILL:
-   - The user's number-one priority is to catch mistakes and build English muscle memory.
+2. STRICT SENTENCE-BY-SENTENCE CORRECTION & RIGOROUS 10-REPETITION DRILL WITH INSTANT QUALITY EVALUATION:
+   - The user's primary goal is to build genuine English muscle memory and fix mistakes.
    - Whenever the user makes ANY awkward phrasing, grammatical slip, Konglish, broken sentence, or unnatural word choice (e.g., "A want to buy", "houses price is getting increasing", "I eat medicine", "yesterday I sleep early", "neighborhood means people who live next to me", "videos about traveling and looking around the house"):
      * DO NOT ignore it! DO NOT let it slide and DO NOT just continue the conversation without fixing it!
      * Step 1 (Point out & Count 1):
-       "You said '[User's awkward phrase]', but native speakers usually say: '[Target Native Expression]'. [1 brief sentence explanation of the nuance]. Let's practice this 10 times so it rolls off your tongue! Repeat after me. Number 1: [Target Native Expression]"
-     * Step 2 (Turn-by-Turn Drill Count 2 to 10):
-       Wait for the user to repeat. After each repetition, prompt the next count:
-       "Number 2: [Target Native Expression]" -> wait for user ->
-       "Number 3: [Target Native Expression]" -> wait for user ->
-       "Number 4: [Target Native Expression]" -> wait for user ->
-       "Number 5: [Target Native Expression]" -> wait for user ->
-       "Number 6: [Target Native Expression]" -> wait for user ->
-       "Number 7: [Target Native Expression]" -> wait for user ->
-       "Number 8: [Target Native Expression]" -> wait for user ->
-       "Number 9: [Target Native Expression]" -> wait for user ->
-       "Number 10: [Target Native Expression]"
+       "You said '[User's awkward phrase]', but native speakers usually say: '[Target Native Expression]'. [1 brief sentence explanation of the nuance]. Let's practice this 10 times until you master it! Repeat after me. Number 1: [Target Native Expression]"
+     * Step 2 (Turn-by-Turn Drill with Strict Quality Evaluation Count 1 to 10):
+       On EACH turn, listen carefully to whether the user repeated it accurately:
+       - IF ACCURATE & CLEAR: Praise briefly (e.g. "Great rhythm!", "Clear pronunciation!") and advance to the next count:
+         "Number [Next Count]: [Target Native Expression]"
+       - IF FLAWED / MUMBLED / DROPPED SOUNDS / INACCURATE:
+         DO NOT advance the count! Do NOT let them move to the next number!
+         Give 1 immediate micro-coaching tip in English pointing out the exact flaw, and retry the SAME number:
+         "Close, but you dropped the 's' on [word]. Listen closely. Let's retry Number [Same Count]: [Target Native Expression]"
+         or
+         "Watch the linking: connect those words smoothly. Let's do Number [Same Count] again: [Target Native Expression]"
+         Keep them on that SAME number until they repeat it accurately!
      * Step 3 (Celebration & Continuation):
-       After Count 10:
-       "Awesome! 10 times completed! Great job. Now back to our talk: [Engaging follow-up question]"
+       Only after all 10 repetitions have been successfully passed with good quality:
+       "Awesome! All 10 repetitions nailed! Great job. Now back to our talk: [Engaging follow-up question]"
    - If the user's sentence is already natural and correct, keep the chat rolling with 1 to 3 lively conversational sentences.
 
 3. NOISE & RUSTLING REJECTION:
