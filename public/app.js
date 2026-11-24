@@ -3,17 +3,31 @@
 // 100% Native Voice (Puck/Aoede) • Connected Speech (연음) • Full-Duplex Barge-in
 // ==============================================================================
 
-const DEFAULT_KEY_B64 = "QVEuQWI4Uk42S3ZEalJpTHViczdLLXB4bzNzbGRwRW0yWWNyV2kwdWRrUUZTbWJJcGF4dWc=";
+const DEFAULT_KEY_B64 = "QUl6YVN5Q2k1ZFNjcDR2Zl9TelJKREZyMkd2WG55Wm5RbmY3NmJB";
 const DEFAULT_GDRIVE_WEBHOOK = "https://script.google.com/macros/s/AKfycbw3LEyYSfVxUEMX1_fv9D0Cm77E22XDUdVQPSzmPlqowsTGjpRAD-s53sX6D-hhGuJt/exec";
 
 function getInitialApiKey() {
   const saved = localStorage.getItem('gemini_api_key');
+  if (saved && (saved.startsWith('AQ.Ab8RN6') || !saved.trim())) {
+    localStorage.removeItem('gemini_api_key');
+    try { return atob(DEFAULT_KEY_B64); } catch (e) { return ''; }
+  }
   if (saved && saved.trim()) return saved.trim();
   try {
     return atob(DEFAULT_KEY_B64);
   } catch (e) {
     return '';
   }
+}
+
+function getInitialLiveModel() {
+  const saved = localStorage.getItem('live_model');
+  const defaultModel = 'models/gemini-2.5-flash-native-audio-latest';
+  if (!saved || saved.includes('gemini-3.8-live') || saved.includes('gemini-2.0-flash') || saved === 'models/gemini-2.5-flash') {
+    localStorage.setItem('live_model', defaultModel);
+    return defaultModel;
+  }
+  return saved;
 }
 
 function escapeHtml(str) {
@@ -55,7 +69,7 @@ const TOPICS = [
 // ==============================================================================
 const state = {
   apiKey: getInitialApiKey(),
-  liveModel: localStorage.getItem('live_model') || 'models/gemini-3.8-live',
+  liveModel: getInitialLiveModel(),
   voice: localStorage.getItem('live_voice') || 'Puck',
   silenceDurationMs: parseInt(localStorage.getItem('live_silence_ms') || '900', 10),
   bargeInSensitivity: localStorage.getItem('live_bargein') || 'START_SENSITIVITY_LOW',

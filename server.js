@@ -7,8 +7,8 @@ require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-let API_KEY = process.env.GEMINI_API_KEY || '';
-let CURRENT_LIVE_MODEL = process.env.LIVE_MODEL || 'models/gemini-3.8-live';
+let API_KEY = process.env.GEMINI_API_KEY || 'AIzaSyCi5dScp4vf_SzRJDFr2GvXnyZnQnf76bA';
+let CURRENT_LIVE_MODEL = process.env.LIVE_MODEL || 'models/gemini-2.5-flash-native-audio-latest';
 let CURRENT_VOICE = process.env.DEFAULT_VOICE || 'Puck';
 
 // Support Vercel serverless /tmp writable directory
@@ -191,9 +191,9 @@ app.get('/api/config', (req, res) => {
     currentLiveModel: CURRENT_LIVE_MODEL,
     currentVoice: CURRENT_VOICE,
     availableLiveModels: [
-      { id: 'models/gemini-3.8-live', name: '⚡ Gemini 3.8 Live (초고속 0.5초 원어민 라이브 - 기본)' },
-      { id: 'models/gemini-3.1-flash-live-preview', name: '🎙️ Gemini 3.1 Flash Live' },
-      { id: 'models/gemini-2.5-flash-native-audio-latest', name: '🎧 Gemini 2.5 Native Audio' }
+      { id: 'models/gemini-2.5-flash-native-audio-latest', name: '⚡ Gemini 2.5 Native Audio (0.5초 원어민 라이브 - 기본)' },
+      { id: 'models/gemini-flash-latest', name: '🎙️ Gemini Flash Latest' },
+      { id: 'models/gemini-3.8-live', name: '⚡ Gemini 3.8 Live' }
     ],
     availableVoices: [
       { id: 'Puck', name: '👦 Puck (친근한 30대 미국 남사친 - 기본)' },
