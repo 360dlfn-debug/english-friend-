@@ -7,7 +7,7 @@ require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-let API_KEY = process.env.GEMINI_API_KEY || 'AIzaSyCi5dScp4vf_SzRJDFr2GvXnyZnQnf76bA';
+let API_KEY = process.env.GEMINI_API_KEY || '';
 let CURRENT_LIVE_MODEL = process.env.LIVE_MODEL || 'models/gemini-2.5-flash-native-audio-latest';
 let CURRENT_VOICE = process.env.DEFAULT_VOICE || 'Puck';
 

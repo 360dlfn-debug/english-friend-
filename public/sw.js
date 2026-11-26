@@ -1,4 +1,4 @@
-const CACHE_NAME = 'english-friend-v25-puck-live-success';
+const CACHE_NAME = 'english-friend-v26-clean-security';
 
 self.addEventListener('install', (e) => {
   self.skipWaiting();

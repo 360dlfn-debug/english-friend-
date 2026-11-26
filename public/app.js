@@ -3,21 +3,16 @@
 // 100% Native Voice (Puck/Aoede) • Connected Speech (연음) • Full-Duplex Barge-in
 // ==============================================================================
 
-const DEFAULT_KEY_B64 = "QUl6YVN5Q2k1ZFNjcDR2Zl9TelJKREZyMkd2WG55Wm5RbmY3NmJB";
+const DEFAULT_KEY_B64 = "";
 const DEFAULT_GDRIVE_WEBHOOK = "https://script.google.com/macros/s/AKfycbw3LEyYSfVxUEMX1_fv9D0Cm77E22XDUdVQPSzmPlqowsTGjpRAD-s53sX6D-hhGuJt/exec";
 
 function getInitialApiKey() {
   const saved = localStorage.getItem('gemini_api_key');
-  if (saved && (saved.startsWith('AQ.Ab8RN6') || !saved.trim())) {
+  if (saved && (saved.startsWith('AQ.Ab8RN6') || saved.startsWith('AIzaSyCi5dScp4vf') || !saved.trim())) {
     localStorage.removeItem('gemini_api_key');
-    try { return atob(DEFAULT_KEY_B64); } catch (e) { return ''; }
-  }
-  if (saved && saved.trim()) return saved.trim();
-  try {
-    return atob(DEFAULT_KEY_B64);
-  } catch (e) {
     return '';
   }
+  return (saved && saved.trim()) ? saved.trim() : '';
 }
 
 function getInitialLiveModel() {
@@ -1255,6 +1250,14 @@ function connectLiveWebSocket(isReconnect = false) {
 async function startSession(isResume = false) {
   if (state.sessionActive || state.isConnecting) return;
 
+  if (!state.apiKey) {
+    const msg = '⚠️ API 키가 필요합니다: 우측 상단 ⚙️ 설정에서 발급받은 키를 입력해 주세요.';
+    statusMsg.textContent = msg;
+    addSystemPill(msg);
+    if (settingsBtn) settingsBtn.click();
+    return;
+  }
+
   // 1. Synchronously unlock AudioContexts inside the tap gesture!
   try {
     initAudioContextsSync();
@@ -1342,6 +1345,13 @@ async function startSession(isResume = false) {
     let msg = `⚠️ 연결 실패: ${err.message}`;
     if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
       msg = '⚠️ 마이크 권한이 거부되었습니다. 브라우저 주소창 옆 권한 설정에서 마이크를 허용해 주세요.';
+    } else if (err.message && (err.message.includes('leaked') || err.message.includes('유출') || err.message.includes('another API key'))) {
+      msg = '⚠️ API 키 유출 감지(Google 차단됨): AI Studio에서 새 키를 발급받아 ⚙️ 설정에 붙여넣어 주세요.';
+      localStorage.removeItem('gemini_api_key');
+      state.apiKey = '';
+      setTimeout(() => {
+        if (settingsBtn) settingsBtn.click();
+      }, 800);
     } else if (err.message && (err.message.includes('크레딧') || err.message.includes('prepayment credits') || err.message.includes('depleted') || err.message.includes('RESOURCE_EXHAUSTED'))) {
       msg = '⚠️ Google AI Studio 크레딧(선불 잔액) 소진: ⚙️ 설정에서 새 API 키를 입력해 주세요.';
       setTimeout(() => {
