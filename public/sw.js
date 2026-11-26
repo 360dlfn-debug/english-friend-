@@ -1,4 +1,4 @@
-const CACHE_NAME = 'english-friend-v29-lightning-fast-latency';
+const CACHE_NAME = 'english-friend-v30-snappy-response-fixed';
 
 self.addEventListener('install', (e) => {
   self.skipWaiting();

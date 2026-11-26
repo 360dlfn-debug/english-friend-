@@ -1117,7 +1117,7 @@ function connectLiveWebSocket(isReconnect = false) {
             automaticActivityDetection: {
               disabled: false,
               startOfSpeechSensitivity: 'START_SENSITIVITY_HIGH',
-              endOfSpeechSensitivity: 'END_SENSITIVITY_DEFAULT',
+              endOfSpeechSensitivity: 'END_SENSITIVITY_HIGH',
               prefixPaddingMs: 150,
               silenceDurationMs: 650
             },
