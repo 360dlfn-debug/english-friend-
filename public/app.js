@@ -71,8 +71,8 @@ const state = {
   apiKey: getInitialApiKey(),
   liveModel: getInitialLiveModel(),
   voice: localStorage.getItem('live_voice') || 'Puck',
-  silenceDurationMs: parseInt(localStorage.getItem('live_silence_ms') || '1600', 10),
-  bargeInSensitivity: localStorage.getItem('live_bargein') || 'START_SENSITIVITY_LOW',
+  silenceDurationMs: 650,
+  bargeInSensitivity: 'START_SENSITIVITY_HIGH',
   gdriveWebhookUrl: localStorage.getItem('gdrive_webhook_url') || DEFAULT_GDRIVE_WEBHOOK,
 
   sessionActive: false,
@@ -323,13 +323,13 @@ class Pcm16CaptureProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     this.targetRate = 16000;
-    this.chunkSamples = 1600; // 100ms at 16kHz
+    this.chunkSamples = 800; // 50ms at 16kHz for ultra-low latency!
     this.outBuf = new Int16Array(this.chunkSamples);
     this.outIdx = 0;
     this.resamplePos = 0;
     this.lastSample = 0;
-    this.noiseThreshold = 0.016; // Noise gate threshold (clothing rustle & ambient filter)
-    this.hangoverFrames = 0;     // Hangover frames to prevent clipping word endings
+    this.noiseThreshold = 0.003; // Highly sensitive: never mutes user's real voice!
+    this.hangoverFrames = 0;
   }
 
   process(inputs) {
@@ -344,9 +344,9 @@ class Pcm16CaptureProcessor extends AudioWorkletProcessor {
     }
     const rms = Math.sqrt(sumSq / channel.length);
 
-    // Noise Gate: Sub-threshold noise (clothing rustles, breath) is gated to zero
+    // Only gate out true digital zero (<0.003). Preserves all spoken words!
     if (rms >= this.noiseThreshold) {
-      this.hangoverFrames = 10; // ~250ms hangover
+      this.hangoverFrames = 15;
     } else if (this.hangoverFrames > 0) {
       this.hangoverFrames--;
     }
@@ -360,13 +360,13 @@ class Pcm16CaptureProcessor extends AudioWorkletProcessor {
       let sample = s0 + (s1 - s0) * frac;
       sample = Math.max(-1, Math.min(1, sample));
       if (isGated) {
-        sample = 0; // Pure silence during clothing rustle
+        sample = 0;
       }
       this.outBuf[this.outIdx++] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
 
       if (this.outIdx >= this.chunkSamples) {
         const copy = new Int16Array(this.outBuf);
-        this.port.postMessage({ pcm: copy.buffer, rms: isGated ? 0 : rms }, [copy.buffer]);
+        this.port.postMessage({ pcm: copy.buffer, rms: rms }, [copy.buffer]);
         this.outIdx = 0;
       }
       this.resamplePos += ratio;
@@ -426,7 +426,7 @@ function sendPcmChunkToLive(pcmArrayBuffer) {
   }
   // Echo Suppression: When AI is actively speaking through smartphone speaker,
   // ignore mic audio under RMS 0.048 to prevent speaker acoustic echo from self-interrupting the AI!
-  if (state.isAiSpeaking && currentMicRms < 0.048) {
+  if (state.isAiSpeaking && currentMicRms < 0.035) {
     return;
   }
   const base64Data = arrayBufferToBase64(pcmArrayBuffer);
@@ -499,8 +499,8 @@ async function startMicCapture() {
     for (let i = 0; i < input.length; i++) sumSq += input[i] * input[i];
     const rawRms = Math.sqrt(sumSq / input.length);
 
-    if (rawRms >= 0.016) {
-      scriptGateHangover = 8;
+    if (rawRms >= 0.003) {
+      scriptGateHangover = 15;
     } else if (scriptGateHangover > 0) {
       scriptGateHangover--;
     }
@@ -1116,10 +1116,10 @@ function connectLiveWebSocket(isReconnect = false) {
           realtimeInputConfig: {
             automaticActivityDetection: {
               disabled: false,
-              startOfSpeechSensitivity: state.bargeInSensitivity,
-              endOfSpeechSensitivity: 'END_SENSITIVITY_LOW',
-              prefixPaddingMs: 300,
-              silenceDurationMs: Math.max(1600, state.silenceDurationMs)
+              startOfSpeechSensitivity: 'START_SENSITIVITY_HIGH',
+              endOfSpeechSensitivity: 'END_SENSITIVITY_DEFAULT',
+              prefixPaddingMs: 150,
+              silenceDurationMs: 650
             },
             activityHandling: 'START_OF_ACTIVITY_INTERRUPTS'
           }

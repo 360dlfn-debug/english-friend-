@@ -1,4 +1,4 @@
-const CACHE_NAME = 'english-friend-v28-anti-echo-drill-fix';
+const CACHE_NAME = 'english-friend-v29-lightning-fast-latency';
 
 self.addEventListener('install', (e) => {
   self.skipWaiting();
