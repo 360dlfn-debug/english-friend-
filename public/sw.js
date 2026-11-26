@@ -1,4 +1,4 @@
-const CACHE_NAME = 'english-friend-v27-auto-key-sync';
+const CACHE_NAME = 'english-friend-v28-anti-echo-drill-fix';
 
 self.addEventListener('install', (e) => {
   self.skipWaiting();

@@ -71,7 +71,7 @@ const state = {
   apiKey: getInitialApiKey(),
   liveModel: getInitialLiveModel(),
   voice: localStorage.getItem('live_voice') || 'Puck',
-  silenceDurationMs: parseInt(localStorage.getItem('live_silence_ms') || '900', 10),
+  silenceDurationMs: parseInt(localStorage.getItem('live_silence_ms') || '1600', 10),
   bargeInSensitivity: localStorage.getItem('live_bargein') || 'START_SENSITIVITY_LOW',
   gdriveWebhookUrl: localStorage.getItem('gdrive_webhook_url') || DEFAULT_GDRIVE_WEBHOOK,
 
@@ -422,6 +422,11 @@ function arrayBufferToBase64(buffer) {
 
 function sendPcmChunkToLive(pcmArrayBuffer) {
   if (!ws || ws.readyState !== WebSocket.OPEN || !state.isConnected || state.isMuted) {
+    return;
+  }
+  // Echo Suppression: When AI is actively speaking through smartphone speaker,
+  // ignore mic audio under RMS 0.048 to prevent speaker acoustic echo from self-interrupting the AI!
+  if (state.isAiSpeaking && currentMicRms < 0.048) {
     return;
   }
   const base64Data = arrayBufferToBase64(pcmArrayBuffer);
@@ -887,17 +892,28 @@ function inspectAiTranscriptForDrill(aiText) {
   if (!aiText) return;
 
   // 1. Check for initial drill initiation: "You said '...', but native speakers usually say: '...'"
-  const startMatch = aiText.match(/You said ['"“]([^'"“”]+)['"”],?\s*but native speakers (?:usually )?say:?\s*['"“]([^'"“”]+)['"”](?:\.?\s*([^.!?\n]+[.!?]))?/i);
-  if (startMatch) {
-    const orig = deduplicateAll(startMatch[1].trim());
-    const target = deduplicateAll(startMatch[2].trim());
-    const expl = (startMatch[3] || '').trim();
+  let orig = '';
+  let target = '';
+  let expl = '';
+
+  const origMatch = aiText.match(/You said\s*["“]([^"“”]+)["”]/i) || aiText.match(/You said\s*['‘]([^'‘’]+)['’]/i);
+  const targetMatch = aiText.match(/native speakers (?:usually )?say:?\s*["“]([^"“”]+)["”]/i) || aiText.match(/native speakers (?:usually )?say:?\s*['‘]([^'‘’]+)['’]/i);
+
+  if (origMatch || targetMatch) {
+    orig = origMatch ? deduplicateAll(origMatch[1].trim()) : '';
+    target = targetMatch ? deduplicateAll(targetMatch[1].trim()) : '';
+    if (!orig) {
+      const lastUser = [...state.messages].reverse().find(m => m.role === 'user');
+      if (lastUser && lastUser.text) orig = lastUser.text;
+    }
+    const explMatch = aiText.match(/(?:It's a|This is|Because|Instead of)\s*([^.!?\n]+[.!?])/i);
+    expl = explMatch ? explMatch[0].trim() : '';
     showDrillBanner(orig, target, expl, 1);
     return;
   }
 
   // 2. Check for turn-by-turn number prompt with retry detection
-  const isRetry = /\b(retry|again|redo|once more|one more time|repeat Number)\b/i.test(aiText);
+  const isRetry = /\b(retry|again|redo|once more|one more time|repeat Number|do Number \d+ again)\b/i.test(aiText);
   const numMatch = aiText.match(/\b(?:Number|Count|Round)\s*(\d+)\b/i);
   if (numMatch) {
     const count = parseInt(numMatch[1], 10);
@@ -905,8 +921,20 @@ function inspectAiTranscriptForDrill(aiText) {
       if (!drillState.active) {
         const afterColon = aiText.split(/Number \d+[:.]?/i)[1];
         const targetCandidate = afterColon ? afterColon.replace(/[.!?].*$/, '').trim() : '';
-        showDrillBanner('', targetCandidate, '', count);
+        const lastUser = [...state.messages].reverse().find(m => m.role === 'user')?.text || '';
+        showDrillBanner(lastUser, targetCandidate, '', count);
       } else {
+        if (!drillState.original) {
+          const lastUser = [...state.messages].reverse().find(m => m.role === 'user')?.text || '';
+          if (lastUser) {
+            drillState.original = lastUser;
+            if (drillOrigText) drillOrigText.textContent = lastUser;
+          }
+        }
+        const feedbackMatch = aiText.match(/(?:Watch|Check|Careful with|Close, but|Make it|Connect|Dropped|Intonation)[^.!?\n]+[.!?]/i);
+        if (feedbackMatch && drillExplText) {
+          drillExplText.textContent = `💡 코칭: ${feedbackMatch[0].trim()}`;
+        }
         updateDrillCount(count, isRetry);
       }
     }
@@ -1089,9 +1117,9 @@ function connectLiveWebSocket(isReconnect = false) {
             automaticActivityDetection: {
               disabled: false,
               startOfSpeechSensitivity: state.bargeInSensitivity,
-              endOfSpeechSensitivity: 'END_SENSITIVITY_HIGH',
-              prefixPaddingMs: 220,
-              silenceDurationMs: state.silenceDurationMs
+              endOfSpeechSensitivity: 'END_SENSITIVITY_LOW',
+              prefixPaddingMs: 300,
+              silenceDurationMs: Math.max(1600, state.silenceDurationMs)
             },
             activityHandling: 'START_OF_ACTIVITY_INTERRUPTS'
           }
