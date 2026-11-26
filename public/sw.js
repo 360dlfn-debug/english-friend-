@@ -1,4 +1,4 @@
-const CACHE_NAME = 'english-friend-v26-clean-security';
+const CACHE_NAME = 'english-friend-v27-auto-key-sync';
 
 self.addEventListener('install', (e) => {
   self.skipWaiting();

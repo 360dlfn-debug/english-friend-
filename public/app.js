@@ -3,16 +3,21 @@
 // 100% Native Voice (Puck/Aoede) • Connected Speech (연음) • Full-Duplex Barge-in
 // ==============================================================================
 
-const DEFAULT_KEY_B64 = "";
+const DEFAULT_KEY_B64 = "QVEuQWI4Uk42S0VJZ2lrUERXcFIxbVNBNUZHYjg3N21kaUZJN1F4bnFKdW9zYlQzOVhYaEE=";
 const DEFAULT_GDRIVE_WEBHOOK = "https://script.google.com/macros/s/AKfycbw3LEyYSfVxUEMX1_fv9D0Cm77E22XDUdVQPSzmPlqowsTGjpRAD-s53sX6D-hhGuJt/exec";
 
 function getInitialApiKey() {
-  const saved = localStorage.getItem('gemini_api_key');
-  if (saved && (saved.startsWith('AQ.Ab8RN6') || saved.startsWith('AIzaSyCi5dScp4vf') || !saved.trim())) {
-    localStorage.removeItem('gemini_api_key');
+  try {
+    const targetKey = atob(DEFAULT_KEY_B64);
+    const saved = localStorage.getItem('gemini_api_key');
+    if (!saved || saved !== targetKey) {
+      localStorage.setItem('gemini_api_key', targetKey);
+      return targetKey;
+    }
+    return saved;
+  } catch (e) {
     return '';
   }
-  return (saved && saved.trim()) ? saved.trim() : '';
 }
 
 function getInitialLiveModel() {
